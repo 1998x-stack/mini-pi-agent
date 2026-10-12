@@ -2,12 +2,12 @@
 
 ## 1. Version identity
 
-- **Integrated branch:** `main`
-- **Version snapshot:** `v0.1`
+- **Branch:** `v0.1`
+- **Base:** frozen from integrated `main` commit `7dd1fbeacb12dd616e6619ffa9a458ced5ccb051`
 - **Package version:** `0.1.0`
 - **Theme:** core Agent Runtime — model/tool/observation feedback loop
 - **Previous version:** none
-- **Status:** implemented baseline
+- **Status:** historical learning snapshot
 
 v0.1 builds the smallest complete architecture needed to understand a Pi-style agent runtime without depending on an agent framework.
 
