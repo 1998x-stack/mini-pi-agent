@@ -1,0 +1,19 @@
+export class ContextError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = new.target.name;
+  }
+}
+
+export class InvalidContextBudgetError extends ContextError {}
+
+export class ContextBudgetExceededError extends ContextError {
+  readonly requiredTokens: number;
+  readonly availableTokens: number;
+
+  constructor(requiredTokens: number, availableTokens: number, label = "context") {
+    super(`${label} requires ${requiredTokens} estimated tokens but only ${availableTokens} are available`);
+    this.requiredTokens = requiredTokens;
+    this.availableTokens = availableTokens;
+  }
+}
