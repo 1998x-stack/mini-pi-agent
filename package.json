@@ -1,0 +1,50 @@
+{
+  "name": "mini-pi-agent",
+  "version": "0.1.0",
+  "description": "A small, extensible Pi-style agent runtime for learning agent architecture from first principles.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "mini-pi": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsx src/cli.ts",
+    "demo": "tsx examples/01-scripted-agent.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.json",
+    "check": "npm run typecheck && npm run test && npm run build",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "keywords": [
+    "agent",
+    "llm",
+    "tool-calling",
+    "pi",
+    "coding-agent",
+    "education"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ]
+}
