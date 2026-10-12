@@ -1,22 +1,18 @@
 # Changelog
 
-## 0.1.0 — 2026-10-12
+## v0.3.1
 
-Initial educational runtime.
+- Added explicit `ContextBudget` and resolved input-budget calculation.
+- Added deterministic `ApproximateTokenEstimator` and prepared-input estimation.
+- Added context budget validation and dedicated budget overflow errors.
+- Added unit tests for budget and token-estimation invariants.
+- Kept AgentLoop unchanged; context planning integration remains for later v0.3 stages.
 
-### Added
+## v0.1.0
 
-- stateful Agent facade
-- standalone agent loop
-- provider abstraction
-- deterministic scripted provider
-- OpenAI-compatible adapter
-- tool registry and validation
-- file tools and opt-in shell tool
-- runtime event bus
-- abort support
-- steering and follow-up queues
-- JSONL session persistence
-- context transform abstraction
-- tests, examples, architecture docs
-- `Agents.md`, `Plan.md`, and `version.md` governance/version documents
+- Initial educational Pi-style Agent Runtime baseline.
+- Provider-neutral message and tool contracts.
+- Core Agent Loop with tool-result feedback.
+- Event bus, cancellation, steering and follow-up queues.
+- JSONL sessions and context-transform seam.
+- Rooted file tools and opt-in shell tool.
