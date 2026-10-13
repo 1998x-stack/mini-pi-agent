@@ -99,11 +99,7 @@ The reference policy selects one chronological contiguous suffix of complete uni
 
 ## v0.3.5 — ContextSummary + SummaryStore ✅ implemented
 
-### Goal
-
-Represent old-history compression as explicit checkpoint artifacts rather than anonymous prose or hidden mutations to session history.
-
-### Implemented
+Implemented:
 
 ```text
 src/context/summary.ts
@@ -115,7 +111,7 @@ tests/context-summary.test.ts
 tests/summary-store.test.ts
 ```
 
-### ContextSummary
+Checkpoint model:
 
 ```ts
 interface ContextSummary {
@@ -127,130 +123,202 @@ interface ContextSummary {
 }
 ```
 
-Coverage has one precise meaning:
+Coverage means the durable prefix `[0..N]`. `InMemorySummaryStore` keeps checkpoints separate from session history, clones on read/write, allows equal or forward coverage, and rejects coverage regression.
+
+---
+
+## v0.3.6 — ProgressiveSummaryPolicy + ContextSummarizer ✅ implemented
+
+### Goal
+
+Advance old-history checkpoints incrementally instead of repeatedly summarizing the complete historical log.
+
+### Implemented
 
 ```text
-coversThroughMessageIndex = N
+src/context/summarizer.ts
+src/context/policies/progressive-summary.ts
+src/context/errors.ts
+src/context/index.ts
 
-means the checkpoint covers the durable-history prefix:
-[0..N]
+tests/context-summarizer.test.ts
+tests/progressive-compaction.test.ts
+tests/context-cancellation.test.ts
 ```
 
-It does not mean an arbitrary subset of history.
-
-### SummaryStore
+### ContextSummarizer contract
 
 ```ts
-interface SummaryStore {
-  getLatest(): Promise<ContextSummary | undefined>;
-  put(summary: ContextSummary): Promise<void>;
-  clear(): Promise<void>;
+interface ContextSummarizerInput {
+  previousSummary?: ContextSummary;
+  messages: readonly AgentMessage[];
+  startMessageIndex: number;
+  endMessageIndex: number;
+  signal: AbortSignal;
+}
+
+interface ContextSummarizerResult {
+  content: string;
+}
+
+interface ContextSummarizer {
+  summarize(input: ContextSummarizerInput): Promise<ContextSummarizerResult>;
 }
 ```
 
-Reference implementation:
+The summarizer owns content generation only. It does not choose coverage boundaries and does not commit checkpoints.
+
+A deterministic offline reference implementation is included:
 
 ```ts
-class InMemorySummaryStore implements SummaryStore
+class DeterministicContextSummarizer implements ContextSummarizer
 ```
 
-The reference store deliberately:
+It exists to prove the mechanism without network/model access. Production callers can inject an LLM-backed implementation behind the same contract.
 
-- stores summaries separately from durable `AgentMessage[]` history;
-- clones summaries on write and read;
-- permits coverage to stay equal or move forward;
-- rejects coverage regression with `SummaryCoverageRegressionError`;
-- keeps the previous checkpoint intact when regression is rejected.
+### ProgressiveSummaryPolicy
 
-### Errors
+```ts
+class ProgressiveSummaryPolicy {
+  advance(input: AdvanceSummaryInput): Promise<ProgressiveSummaryResult>;
+}
+```
+
+Target progression:
 
 ```text
-InvalidContextSummaryError
+history[0..100]
+      ↓
+     S1
+
+S1 + history[101..170]
+      ↓
+     S2
+
+S2 + history[171..240]
+      ↓
+     S3
+```
+
+The policy reads the latest checkpoint from `SummaryStore`, computes the newly covered range beginning at `previousCoverage + 1`, passes only that new range plus the previous checkpoint to `ContextSummarizer`, estimates the generated summary, and commits only after all validation/cancellation checks succeed.
+
+### Coverage-boundary rule
+
+A checkpoint boundary must equal the `endIndex` of a complete `ContextUnit`.
+
+Therefore a target such as:
+
+```text
+Assistant(call_a, call_b)   index 10
+ToolResult(call_a)          index 11
+ToolResult(call_b)          index 12
+```
+
+may cover through `12`, but may not cover through `10` or `11`.
+
+This prevents a summary checkpoint from semantically cutting through a causal tool exchange.
+
+A trailing incomplete tool exchange also cannot become a checkpoint boundary.
+
+### No-op rule
+
+If requested coverage already equals the latest checkpoint coverage:
+
+```text
+requested = current
+```
+
+then the policy returns `status="unchanged"` and does not invoke the summarizer.
+
+### Failure atomicity
+
+The commit sequence is deliberately:
+
+```text
+read previous checkpoint
+      ↓
+validate target boundary
+      ↓
+generate candidate content
+      ↓
+check cancellation
+      ↓
+validate non-empty content
+      ↓
+estimate candidate
+      ↓
+check cancellation
+      ↓
+SummaryStore.put(candidate)
+```
+
+If generation throws or cancellation happens before `put()`, the previous checkpoint remains unchanged.
+
+New errors:
+
+```text
+InvalidSummaryCoverageBoundaryError
+SummaryGenerationError
+```
+
+Coverage regression continues to use:
+
+```text
 SummaryCoverageRegressionError
 ```
 
 ### Core invariants
 
-- summary identity is explicit;
-- summary content is non-empty;
-- coverage is an inclusive, non-negative prefix boundary;
-- accounting fields are validated;
-- a checkpoint is a derived artifact, not a durable conversation message;
-- summary storage never deletes or edits SessionStore history;
-- checkpoint coverage is monotonic;
-- the mechanism is deterministic and does not require a live model.
+- checkpoint coverage advances monotonically;
+- newly summarized history begins exactly at `previousCoverage + 1`;
+- target and stored coverage must align to complete context-unit boundaries;
+- tool exchanges are never summarized only partially;
+- same-boundary requests are no-ops;
+- failed/cancelled summarization does not advance `SummaryStore`;
+- generated content must be non-empty;
+- summary token estimate is recorded at checkpoint creation;
+- summarizer receives cloned message projections rather than mutable durable-history references;
+- durable `AgentMessage[]` remains unchanged;
+- AgentLoop is still unchanged.
 
 ### Verification performed
 
-- strict TypeScript subset compilation passed under `strict`, `noUncheckedIndexedAccess`, and `exactOptionalPropertyTypes`;
-- runtime smoke verified coverage can advance from 2 to 5;
-- runtime smoke verified an attempted regression from 5 to 4 throws and preserves the latest checkpoint.
+Strict TypeScript subset compilation passed under:
 
-The full repository Vitest suite is not claimed as run in the current execution environment.
+```text
+strict
+noUncheckedIndexedAccess
+exactOptionalPropertyTypes
+```
+
+Runtime smoke verified:
+
+```text
+first advance:
+  new history 0..1
+  → S1 covers 0..1
+
+second advance:
+  previous = S1
+  new history 2..3 only
+  → S2 covers 0..3
+
+abort after summarizer returns but before store.put:
+  → abort propagated
+  → latest store checkpoint remains S2
+```
+
+The full repository Vitest suite is not claimed as run in the current execution environment because repository dependencies could not be installed there.
 
 ---
 
-## v0.3.6 — ProgressiveSummaryPolicy + ContextSummarizer ← next
+## v0.3.7 — AgentLoop integration + events + example ← next
 
 ### Goal
 
-Generate and advance summary checkpoints incrementally instead of repeatedly summarizing the entire historical log.
+Use the completed context subsystem only at the model-call boundary and expose its lifecycle through events/examples.
 
-Target progression:
-
-```text
-messages 0..100
-    ↓
-   S1 covers 0..100
-
-S1 + messages 101..170
-    ↓
-   S2 covers 0..170
-
-S2 + messages 171..240
-    ↓
-   S3 covers 0..240
-```
-
-### Add
-
-```text
-src/context/summarizer.ts
-src/context/policies/progressive-summary.ts
-
-tests/progressive-compaction.test.ts
-tests/context-cancellation.test.ts
-```
-
-### Target contracts
-
-```ts
-interface ContextSummarizer {
-  summarize(input: ContextSummarizerInput): Promise<string>;
-}
-
-interface ProgressiveSummaryPolicy {
-  compact(input: ProgressiveSummaryInput): Promise<ContextSummary | undefined>;
-}
-```
-
-A deterministic fake summarizer should prove the mechanism without network access.
-
-### Required invariants
-
-- existing checkpoint coverage is respected;
-- only history after the previous coverage boundary is supplied as new history;
-- next coverage never moves backward;
-- no checkpoint is created when there is no newly coverable history;
-- cancellation propagates through summarization;
-- failed/cancelled summarization does not advance `SummaryStore`;
-- durable history remains unchanged.
-
----
-
-## v0.3.7 — AgentLoop integration + events + example
-
-Only after summary mechanics are complete should runtime integration occur:
+Target integration:
 
 ```text
 Agent state.messages
@@ -264,15 +332,28 @@ Agent state.messages
             LLMProvider
 ```
 
-Planned integration files:
+The integration also needs to decide how a stored summary checkpoint participates in `PreparedContext` while keeping it separate from durable history.
+
+Planned files:
 
 ```text
 src/core/agent-loop.ts
 src/core/agent.ts
 src/core/events.ts
+src/context/... summary-aware planner composition
 examples/07-context-compaction.ts
 tests/agent-context-integration.test.ts
 ```
+
+Required proof:
+
+```text
+provider-visible context
+<
+durable history
+```
+
+when compaction is needed, while SessionStore and `state.messages` remain complete.
 
 ---
 
@@ -284,10 +365,11 @@ tests/agent-context-integration.test.ts
 - [x] budgeted planner
 - [x] summary checkpoint model
 - [x] monotonic SummaryStore
-- [ ] ContextSummarizer contract
-- [ ] progressive compaction policy
-- [ ] summarization cancellation semantics
+- [x] ContextSummarizer contract
+- [x] progressive compaction policy
+- [x] summarization cancellation semantics
 - [ ] AgentLoop integration
+- [ ] summary-aware prepared context
 - [ ] context lifecycle events
 - [ ] deterministic integration tests
 - [ ] educational example
