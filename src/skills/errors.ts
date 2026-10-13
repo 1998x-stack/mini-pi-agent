@@ -28,3 +28,29 @@ export class DuplicateSkillError extends SkillError {
     this.secondManifestPath = secondManifestPath;
   }
 }
+
+export class SkillPathError extends SkillError {
+  readonly root: string;
+  readonly path: string;
+
+  constructor(message: string, root: string, path: string) {
+    super(`${message}: root='${root}', path='${path}'`);
+    this.root = root;
+    this.path = path;
+  }
+}
+
+export class SkillIdentityMismatchError extends SkillError {
+  readonly expectedName: string;
+  readonly actualName: string;
+  readonly manifestPath: string;
+
+  constructor(expectedName: string, actualName: string, manifestPath: string) {
+    super(
+      `skill identity changed while loading '${manifestPath}': expected '${expectedName}', actual '${actualName}'`
+    );
+    this.expectedName = expectedName;
+    this.actualName = actualName;
+    this.manifestPath = manifestPath;
+  }
+}
