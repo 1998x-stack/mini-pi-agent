@@ -86,16 +86,47 @@ export class HookPipeline {
 
     switch (hook) {
       case "before_run":
+        return (await this.runContextContributions(
+          "before_run",
+          event as HookEventMap["before_run"],
+          context
+        )) as HookPipelineResultMap[K];
       case "before_model":
-        return (await this.runContextContributions(hook, event, context)) as HookPipelineResultMap[K];
+        return (await this.runContextContributions(
+          "before_model",
+          event as HookEventMap["before_model"],
+          context
+        )) as HookPipelineResultMap[K];
       case "before_tool":
-        return (await this.runBeforeTool(event as BeforeToolEvent, context)) as HookPipelineResultMap[K];
+        return (await this.runBeforeTool(
+          event as HookEventMap["before_tool"],
+          context
+        )) as HookPipelineResultMap[K];
       case "after_tool":
-        return (await this.runAfterTool(event as AfterToolEvent, context)) as HookPipelineResultMap[K];
+        return (await this.runAfterTool(
+          event as HookEventMap["after_tool"],
+          context
+        )) as HookPipelineResultMap[K];
       case "after_model":
+        await this.runObserve(
+          "after_model",
+          event as HookEventMap["after_model"],
+          context
+        );
+        return undefined as HookPipelineResultMap[K];
       case "after_turn":
+        await this.runObserve(
+          "after_turn",
+          event as HookEventMap["after_turn"],
+          context
+        );
+        return undefined as HookPipelineResultMap[K];
       case "after_run":
-        await this.runObserve(hook, event, context);
+        await this.runObserve(
+          "after_run",
+          event as HookEventMap["after_run"],
+          context
+        );
         return undefined as HookPipelineResultMap[K];
     }
   }
