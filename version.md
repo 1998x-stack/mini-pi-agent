@@ -7,13 +7,13 @@
 - **Current package:** `0.3.0` until v0.4 is frozen
 - **Target package:** `0.4.0`
 - **Theme:** Skills, progressive disclosure, and workflow knowledge above the runtime
-- **Status:** **active design snapshot**
+- **Status:** **active implementation snapshot**
 
 Primary mental model:
 
 > **A Skill is discoverable workflow knowledge. It changes what the model knows how to do without changing how the Agent Runtime executes.**
 
-The second invariant is inherited directly from v0.3:
+Inherited v0.3 invariant:
 
 > **Available knowledge is not the same thing as model-visible context.**
 
@@ -23,52 +23,31 @@ A repository may contain hundreds of Skills while a normal turn should expose on
 
 ## 2. Architectural delta from v0.3
 
-v0.3 established:
-
 ```text
-durable history
-      ↓
+v0.3
+Durable History
+   ↓
 ContextRuntime
-      ↓
-budgeted PreparedContext
-      ↓
+   ↓
+PreparedContext
+   ↓
 LLMProvider
-```
 
-v0.4 adds a workflow-knowledge layer above those mechanisms:
-
-```text
-Skill roots
-    ↓
+v0.4 adds:
+Skill package roots
+   ↓
 SkillSource / discovery
-    ↓
+   ↓
 SkillRegistry
-    │
-    ├── compact descriptors ───────┐
-    │                              │
-    └── selected descriptor        │
-             ↓                     │
-         SkillLoader               │
-             ↓                     │
-         LoadedSkill               │
-             └──────────────┬──────┘
-                            ↓
-                    Context supplements
-                            ↓
-                     ContextRuntime
-                            ↓
-                    PreparedContext
-                            ↓
-                       AgentLoop
+   ↓
+SkillLoader / activation
+   ↓
+Context supplements
+   ↓
+existing ContextRuntime
 ```
 
-The Agent Loop must not grow branches such as:
-
-```ts
-if (skill.name === "code-review") {
-  // forbidden special runtime behavior
-}
-```
+The Agent Loop must not grow Skill-specific branches.
 
 ---
 
@@ -95,8 +74,6 @@ trusted executable registration/hooks
 changes runtime behavior
 ```
 
-A Skill may tell the model to call ordinary tools, but the Skill itself is not an executor.
-
 Strict rule:
 
 ```text
@@ -104,69 +81,51 @@ discover != execute
 load != execute
 ```
 
-Scripts shipped inside a Skill execute only through normal tools such as the opt-in shell path. v0.4 creates no hidden execution channel.
+A Skill can instruct the model to use ordinary tools, but no Skill discovery/loading path executes scripts.
 
 ---
 
 ## 4. Progressive disclosure
 
-v0.4 is organized around four levels:
-
 ```text
 Level 0
 name + description
-cheap catalog metadata
 
-        ↓ activated
+        ↓ activate
 
 Level 1
 full SKILL.md instructions
 
-        ↓ requested when useful
+        ↓ explicit need
 
 Level 2
-references/*.md and similar resources
-loaded through ordinary file tools
+references
 
-        ↓ explicitly executed when useful
+        ↓ explicit tool execution
 
 Level 3
 scripts / assets / templates
-still governed by ordinary tool/runtime policy
 ```
 
-The default model context must not inject every full Skill body.
+The default context must never inject every full Skill body.
 
 ---
 
-## 5. Target package model
+## 5. v0.4.1 — Skill manifest parser + core types ✅
 
-Recommended minimal package:
+Implemented:
 
 ```text
-.mini-pi/skills/
-└── code-review/
-    ├── SKILL.md              required
-    ├── references/           optional
-    ├── scripts/              optional
-    └── assets/               optional
+src/skills/types.ts
+src/skills/errors.ts
+src/skills/manifest-parser.ts
+src/skills/index.ts
+src/index.ts
+
+tests/skill-manifest.test.ts
 ```
 
-Educational `SKILL.md` subset:
-
-```markdown
----
-name: code-review
-description: Review changes for bugs, regressions, missing tests and maintainability risks.
----
-
-# Code Review
-
-## Workflow
-...
-```
-
-Initial metadata deliberately stays small:
+Public model:
 
 ```ts
 interface SkillManifest {
@@ -174,164 +133,153 @@ interface SkillManifest {
   description: string;
   metadata?: Record<string, string>;
 }
-```
 
----
-
-## 6. Core contracts
-
-Discovery object:
-
-```ts
-interface SkillDescriptor {
-  name: string;
-  description: string;
-  root: string;
-  manifestPath: string;
-  metadata?: Record<string, string>;
-}
-```
-
-Loaded body:
-
-```ts
-interface LoadedSkill {
-  descriptor: SkillDescriptor;
+interface ParsedSkillDocument {
+  manifest: SkillManifest;
   instructions: string;
 }
 ```
 
-Source:
+Parser entry point:
 
 ```ts
-interface SkillSource {
-  discover(context: SkillDiscoveryContext): Promise<SkillDescriptor[]>;
-}
+parseSkillDocument(source: string): ParsedSkillDocument
 ```
 
-Registry:
+The v0.4.1 frontmatter subset is intentionally narrow and deterministic:
 
-```ts
-interface SkillRegistry {
-  list(): readonly SkillDescriptor[];
-  get(name: string): SkillDescriptor | undefined;
-}
+```text
+---
+name: code-review
+description: Review changes for bugs and regressions.
+owner: platform
+---
+# Code Review
+...
 ```
 
-Loader:
+Supported:
 
-```ts
-interface SkillLoader {
-  load(descriptor: SkillDescriptor, signal: AbortSignal): Promise<LoadedSkill>;
-}
+- required opening/closing `---` delimiters;
+- non-empty `name` and `description`;
+- non-empty Markdown instructions body;
+- additional scalar metadata;
+- single/double-quoted scalar values;
+- BOM and CRLF/CR normalization;
+- blank/comment lines inside frontmatter.
+
+Explicitly rejected:
+
+- duplicate keys;
+- nested/indented mappings;
+- arrays and objects;
+- YAML block scalars;
+- malformed `key: value` lines;
+- missing required fields/body.
+
+Errors use:
+
+```text
+SkillError
+└── InvalidSkillManifestError
 ```
 
-Activation state is run-scoped in v0.4.
+with line provenance where available.
+
+### v0.4.1 invariant
+
+```text
+string SKILL.md
+      ↓
+pure parser
+      ↓
+manifest + instructions
+```
+
+No filesystem scan, registry mutation, Skill activation, context injection, or script execution occurs in this stage.
+
+### Verification
+
+The source subset passed strict TypeScript checking with:
+
+```text
+strict
+noUncheckedIndexedAccess
+exactOptionalPropertyTypes
+```
+
+Runtime smoke verified quoted metadata, BOM/CRLF normalization, duplicate-key rejection, and rejection of unsupported list metadata.
+
+The full repository Vitest suite is not claimed as run in the current execution environment.
 
 ---
 
-## 7. Activation model
-
-The reference activation mechanism reuses the existing tool feedback loop through a tiny adapter:
+## 6. Planned increments
 
 ```text
-available descriptors
-       ↓
-LLM chooses
-       ↓
-load_skill(name)
-       ↓
-SkillActivationTool
-       ↓
-SkillRegistry + SkillLoader
-       ↓
-run-scoped ActiveSkillStore
-       ↓
-next context preparation includes loaded instructions
-```
-
-`load_skill` is an adapter over Skill mechanics; conceptually a Skill remains workflow knowledge rather than an environment capability.
-
-Explicit/manual activation may also be exposed later through CLI syntax such as `/skill:code-review`, but CLI behavior must call the same activation mechanism rather than create a second Skill runtime.
-
----
-
-## 8. Context integration rule
-
-Skill material must participate in v0.3 budgeting.
-
-Preferred shape:
-
-```ts
-interface ContextSupplement {
-  id: string;
-  kind: "skill-catalog" | "active-skill";
-  content: string;
-  required: boolean;
-}
-```
-
-Exact fields may evolve during v0.4.4, but the invariant is fixed:
-
-```text
-SkillRegistry / ActiveSkills
-            ↓
-Context supplements
-            ↓
-ContextRuntime / ContextPlanner
-            ↓
-PreparedContext
-```
-
-Forbidden shortcut:
-
-```text
-Skill text
-   ↓
-raw string append after planner
-```
-
-No Skill content may bypass context-budget accounting.
-
----
-
-## 9. Reference/source loading
-
-`SkillLoader` loads only `SKILL.md`.
-
-Optional references remain discoverable through instructions and are read using existing file tools:
-
-```text
-LoadedSkill
-   ↓
-"For security review read references/security.md"
-   ↓
-normal read tool
-```
-
-This avoids inventing a separate reference execution protocol.
-
-Skill-relative helper paths, when implemented, must remain inside the Skill root. Workspace file tools retain their existing workspace-root safety rules; the two roots must not be conflated.
-
----
-
-## 10. Planned increments
-
-```text
-v0.4.1  Skill manifest parser + core types
-v0.4.2  filesystem discovery + SkillRegistry
+v0.4.1  Skill manifest parser + core types                   ✅ implemented
+v0.4.2  ProjectSkillSource + SkillRegistry                  ← next
 v0.4.3  SkillLoader + path/root validation
 v0.4.4  compact catalog + context supplement seam
 v0.4.5  run-scoped activation + load_skill adapter
-v0.4.6  references/events/manual activation surface
-v0.4.7  Agent integration + examples + freeze
+v0.4.6  references + events + manual activation surface
+v0.4.7  Agent integration + examples + 0.4.0 freeze
 ```
 
-Each increment must preserve one dominant learning objective. Do not jump directly to activation before descriptor discovery/loading contracts are proven.
+The order is intentional:
+
+```text
+document format
+    ↓
+discovery/catalog
+    ↓
+on-demand loading
+    ↓
+context representation
+    ↓
+activation
+    ↓
+lifecycle surfaces
+    ↓
+end-to-end runtime integration
+```
 
 ---
 
-## 11. Explicit non-goals
+## 7. Next increment — v0.4.2
+
+The next problem is no longer “what is a valid Skill document?” v0.4.1 now answers that.
+
+The next problem is:
+
+```text
+Given a project workspace,
+which Skills exist,
+and how do we expose a deterministic cheap catalog
+without loading every Skill body into model context?
+```
+
+v0.4.2 introduces:
+
+```text
+SkillDiscoveryContext
+SkillDescriptor
+SkillSource
+ProjectSkillSource
+SkillRegistry
+```
+
+Reference root:
+
+```text
+<cwd>/.mini-pi/skills/*/SKILL.md
+```
+
+Discovery may read enough of `SKILL.md` to obtain manifest metadata, but it must return descriptors only and must never execute scripts/references.
+
+---
+
+## 8. Explicit non-goals
 
 Keep out of v0.4:
 
@@ -349,20 +297,16 @@ Keep out of v0.4:
 - subagents;
 - provider-specific Skill protocols.
 
-Those belong to later versions or require evidence before adding complexity.
-
 ---
 
-## 12. Branch rule
+## 9. Branch rule
 
-`v0.4` is now the canonical branch for the Skills mental model.
-
-During design and implementation:
+`v0.4` is the canonical branch for the Skills mental model.
 
 ```text
 v0.3 remains frozen
 v0.4 receives Skills-only deltas
-package remains 0.3.0 until the v0.4 final freeze
+package remains 0.3.0 until final v0.4 freeze
 ```
 
-Only after all v0.4 acceptance checks pass should the branch be marked an implemented historical snapshot and the package/version metadata advance to `0.4.0`.
+Only after all v0.4 acceptance checks pass should package/version metadata advance to `0.4.0`.
