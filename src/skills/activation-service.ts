@@ -44,6 +44,12 @@ export class SkillActivationService {
     const loaded = await this.loader.load(descriptor, signal);
     signal.throwIfAborted();
 
+    // Another activation may have committed while this load was in flight.
+    const activatedWhileLoading = this.activeStore.get(normalizedName);
+    if (activatedWhileLoading) {
+      return { status: "already-active", skill: activatedWhileLoading };
+    }
+
     const stored = this.activeStore.activate(loaded);
     return { status: "activated", skill: stored };
   }
