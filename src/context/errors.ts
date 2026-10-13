@@ -36,3 +36,14 @@ export class SummaryCoverageRegressionError extends ContextError {
     this.nextCoverage = nextCoverage;
   }
 }
+
+export class InvalidSummaryCoverageBoundaryError extends ContextError {}
+
+export class SummaryGenerationError extends ContextError {
+  readonly cause: unknown;
+
+  constructor(message: string, cause?: unknown) {
+    super(message);
+    this.cause = cause;
+  }
+}
