@@ -1,395 +1,228 @@
-# v0.4 Test Plan
+# v0.4 Test Plan — Implemented
 
-## 1. Testing philosophy
+## Testing philosophy
 
-v0.4 must prove Skills as a workflow-knowledge layer without requiring a live model or network service.
+v0.4 proves Skills as a workflow-knowledge layer without requiring a live model or network service.
 
 Reference strategy:
 
 ```text
 fixture SKILL.md files
-+ temporary project roots
-+ deterministic fake loader/provider
-+ existing ScriptedLLM / capturing provider
+temporary project roots
+deterministic fake/capturing provider
+filesystem loader smoke
+focused unit/integration tests
 ```
 
-The important tests are architectural invariants, not only happy-path parsing.
+The important assertions are architectural invariants, not only parsing happy paths.
 
 ---
 
-## 2. Manifest parser tests
-
-File:
+## Implemented test files
 
 ```text
 tests/skill-manifest.test.ts
-```
-
-Cases:
-
-```text
-valid minimal frontmatter
-valid extra scalar metadata
-missing frontmatter
-missing name
-empty name
-missing description
-empty description
-empty instructions
-malformed delimiter
-malformed key/value line
-duplicate reserved key
-Unicode content
-deterministic repeated parse
-source text remains unchanged
-```
-
-Must prove parsing has no filesystem or execution side effects.
-
----
-
-## 3. Discovery tests
-
-File:
-
-```text
 tests/skill-discovery.test.ts
-```
-
-Fixture tree:
-
-```text
-project/
-└── .mini-pi/skills/
-    ├── alpha/SKILL.md
-    ├── beta/SKILL.md
-    └── ignored/no-skill.txt
-```
-
-Cases:
-
-- missing root returns empty result;
-- only valid Skill packages discovered;
-- descriptors contain root/manifestPath/name/description only;
-- deterministic ordering regardless of filesystem enumeration order;
-- invalid manifest fails with typed error and path context;
-- cancellation propagates;
-- scripts/references are not read/executed during discovery.
-
----
-
-## 4. Registry tests
-
-File:
-
-```text
 tests/skill-registry.test.ts
-```
-
-Cases:
-
-```text
-register one descriptor
-list deterministic order
-lookup exact normalized name
-duplicate name rejected
-registry source object cannot be mutated through returned list
-unknown name => undefined
-```
-
-If normalization is case-sensitive in v0.4, test that explicitly. If normalization changes, tests become the source of truth.
-
----
-
-## 5. Loader/path tests
-
-Files:
-
-```text
 tests/skill-loader.test.ts
 tests/skill-paths.test.ts
-```
-
-Cases:
-
-- load requested Skill only;
-- descriptor root preserved;
-- manifest identity matches descriptor;
-- changed manifest name after discovery rejected;
-- empty body rejected;
-- manifest path escape rejected;
-- Skill-relative helper path inside root accepted;
-- `../` root escape rejected;
-- symlink behavior documented/tested according to implementation policy;
-- references/scripts not loaded by SkillLoader;
-- abort before/during read propagated.
-
----
-
-## 6. Catalog tests
-
-File:
-
-```text
 tests/skill-catalog.test.ts
-```
-
-Cases:
-
-```text
-empty catalog
-one descriptor
-many descriptors
-stable ordering
-special-character escaping
-full SKILL.md body never appears
-duplicate descriptors impossible after registry validation
-catalog rendering deterministic
-```
-
-Size assertion:
-
-For a fixture with several large Skill bodies, catalog size must depend on descriptor text only, not instruction-body length.
-
----
-
-## 7. Context supplement tests
-
-File:
-
-```text
 tests/context-supplements.test.ts
-```
-
-Must prove:
-
-```text
-catalog supplement participates in token estimation
-active-skill supplement participates in token estimation
-summary checkpoint still works
-recent message tail still works
-supplements do not become AgentMessage history
-required supplement overflow produces typed budget failure
-ordering is deterministic
-```
-
-Critical regression assertion:
-
-```text
-state.messages before prepare
-==
-state.messages after prepare
-```
-
----
-
-## 8. ActiveSkillStore tests
-
-File:
-
-```text
 tests/skill-activation.test.ts
-```
-
-Cases:
-
-```text
-starts empty
-activate one
-activate second
-repeat same name is idempotent
-activation order deterministic
-get/list return safe copies/views
-clear removes all active bodies
-turn metadata preserved
-```
-
----
-
-## 9. load_skill adapter tests
-
-File:
-
-```text
 tests/load-skill-tool.test.ts
+tests/skill-events.test.ts
+tests/agent-skills-integration.test.ts
 ```
-
-Cases:
-
-- schema accepts Skill name;
-- unknown name => SkillNotFoundError represented as normal recoverable tool failure;
-- known Skill invokes loader once;
-- repeated activation does not duplicate active body;
-- tool result is concise activation status, not full instruction dump;
-- cancellation propagates;
-- loader error remains observable;
-- no hidden script execution.
 
 ---
 
-## 10. Lifecycle event tests
+## Manifest parser
 
-File:
+Proves:
 
 ```text
-tests/skill-events.test.ts
+valid scalar frontmatter
+required name/description/body
+extra scalar metadata
+quoted values
+BOM / CRLF normalization
+duplicate-key rejection
+unsupported nested/list/object/block YAML rejection
+deterministic repeated parse
 ```
 
-Expected ordering example:
+Parsing is side-effect free.
+
+---
+
+## Discovery / Registry
+
+Proves:
+
+```text
+missing root → empty catalog
+one-level package discovery only
+descriptor-only results
+deterministic ordering
+invalid manifest propagation
+cancellation propagation
+trim+lowercase identity
+duplicate normalized name rejection
+clone-safe list/get behavior
+```
+
+---
+
+## Loader / path safety
+
+Proves:
+
+```text
+load one requested SKILL.md only
+absolute paths required
+manifest stays under root
+manifest == root/SKILL.md
+../ escape rejected
+symlink root rejected
+symlink manifest rejected
+canonical containment
+manifest identity drift rejected
+references/scripts/assets not traversed
+source descriptor unchanged
+cancellation preserved
+```
+
+---
+
+## Catalog / ContextSupplement
+
+Proves:
+
+```text
+catalog exposes name + description only
+full instructions never appear in catalog
+deterministic catalog order
+active body becomes active-skill supplement
+supplement ids deterministic and valid
+summary + supplements coexist
+supplements enter token estimation before final budget check
+supplements never become AgentMessage history
+oversized required supplement → ContextBudgetExceededError
+```
+
+---
+
+## ActiveSkillStore / activation service
+
+Proves:
+
+```text
+normalized-name idempotency
+sequential repeat does not reload
+deterministic active listing
+clone-safe get/list/activate
+clear removes run state
+unknown Skill → UnknownSkillError
+cancellation propagation
+post-load active re-check for near-concurrent completion
+```
+
+---
+
+## load_skill adapter
+
+Proves:
+
+```text
+ordinary Tool schema
+non-empty name validation
+unknown name failure
+compact activation acknowledgement
+full SKILL.md body absent from ToolResult
+repeated activation reports already-active
+active body available through ContextSupplement path
+```
+
+---
+
+## Events / resource boundary
+
+Proves:
 
 ```text
 skill_activation_start
 skill_activated
-context_prepare_start
-skill_context_prepared
-context_prepared
+skill_activation_reused
+skill_activation_failed
+
+origins: api | manual | tool
 ```
 
-Tests should verify metadata but avoid depending on full instruction text in events.
+Event payloads contain metadata only, never instructions.
 
-Event listeners must remain observational: removing all listeners cannot change activation correctness.
+Listener failures do not change activation behavior.
 
----
-
-## 11. End-to-end Agent test
-
-File:
+A real package fixture also proves:
 
 ```text
-tests/agent-skills-integration.test.ts
-```
-
-Fixture:
-
-```text
-Skills:
-  code-review (large body)
-  release (large body)
-  incident (large body)
-```
-
-Scripted provider sequence:
-
-```text
-request 1
-→ sees catalog descriptors only
-→ returns load_skill(code-review)
-
-runtime
-→ activates code-review
-
-request 2
-→ sees catalog + full code-review instructions
-→ does not see full release/incident bodies
-→ returns final answer
-```
-
-Assertions:
-
-```text
-AgentLoop remains generic
-state.messages contains real user/assistant/tool messages only
-full Skill body not persisted as fake conversation message
-active body visible only after activation
-unselected Skill bodies absent
-next Agent run clears active body
-catalog still available next run
+activation does not expose reference contents
+activation does not execute scripts
 ```
 
 ---
 
-## 12. Budget stress test
+## Agent end-to-end integration
 
-Create many descriptors and one large active Skill.
-
-Cases:
+`tests/agent-skills-integration.test.ts` proves the final lifecycle:
 
 ```text
-catalog + active body + recent tail fits
-→ provider request succeeds
+Agent.create()
+→ discovers two project Skills
+→ registers load_skill
 
-catalog alone exceeds budget
-→ explicit ContextBudgetExceededError
+first request
+→ catalog contains both descriptors
+→ no full Skill body
 
-active required Skill body exceeds remaining budget
-→ explicit ContextBudgetExceededError
+model calls load_skill("code-review")
+→ loader called for code-review only
+→ compact durable ToolResult
 
-large inactive Skill bodies
-→ must not affect request token estimate
+second request
+→ code-review body visible
+→ release body still absent
+
+run ends
+→ active state cleared
+
+next Agent.prompt()
+→ catalog still visible
+→ code-review body absent again
 ```
 
-This is the core progressive-disclosure proof.
-
----
-
-## 13. Security/trust invariant tests
-
-Tests should prove negative behavior:
+It also proves:
 
 ```text
-discovery never imports .js/.ts scripts
-loader never executes scripts
-activation never spawns a process
-reference directories are not recursively ingested
-path resolver cannot escape Skill root
-```
-
-v0.4 is not a sandbox, but it must not create unnecessary hidden execution paths.
-
----
-
-## 14. Compatibility tests
-
-Existing v0.3 behavior must remain valid when Skills are disabled:
-
-```text
-Agent without Skill configuration
-→ ContextRuntime behavior unchanged
-→ legacy ContextTransform path unchanged where still supported
-```
-
-When Skills are enabled but no Skill root exists:
-
-```text
-empty catalog
-normal Agent behavior
+Skill events bridge into Agent events
+full body absent from Agent event payloads
+ContextSupplement never enters durable history
+Skills require AgentOptions.context
 ```
 
 ---
 
-## 15. Verification policy
+## Verification status
 
-Before marking each increment complete:
+Increment-level and final integration source subsets were compiled with:
 
 ```text
-TypeScript strict checking
+strict
 noUncheckedIndexedAccess
 exactOptionalPropertyTypes
-focused runtime smoke
-matching unit tests added
 ```
 
-Do not claim full `npm run check` unless it was actually run successfully in the execution environment.
+Runtime smokes covered parser/discovery/loading, context budgeting, activation, events, and final progressive Agent behavior.
 
----
+The full repository `vitest run` / `npm run check` suite is **not claimed as executed** in the current environment because repository dependency installation is unavailable through the network path.
 
-## 16. Final acceptance matrix
-
-```text
-Manifest parsing                         [ ]
-Project discovery                       [ ]
-Duplicate collision behavior            [ ]
-Safe one-Skill loading                  [ ]
-Path-root invariants                    [ ]
-Compact catalog                         [ ]
-Context-budget integration              [ ]
-Run-scoped activation                   [ ]
-Idempotent activation                   [ ]
-load_skill adapter                      [ ]
-Reference/script ordinary-tool path     [ ]
-Skill events                            [ ]
-End-to-end progressive disclosure       [ ]
-Run reset                               [ ]
-v0.3 regression compatibility           [ ]
-Package/docs freeze                     [ ]
-```
+No test result is inferred from source presence alone.
