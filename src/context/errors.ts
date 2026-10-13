@@ -17,3 +17,5 @@ export class ContextBudgetExceededError extends ContextError {
     this.availableTokens = availableTokens;
   }
 }
+
+export class InvalidContextHistoryError extends ContextError {}
