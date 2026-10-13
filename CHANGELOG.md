@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.4.5
+
+- Added run-scoped `ActiveSkillStore` and reference `InMemoryActiveSkillStore` with normalized-name identity, deterministic listing, clone-on-read/write semantics, and explicit `clear()`.
+- Added shared `SkillActivationService` for both model-driven and future manual activation paths.
+- Activation checks already-active state before loading, so sequential repeated activation does not reload or duplicate active state.
+- Added a post-load active-state re-check so near-concurrent completion reports `already-active` if another activation committed while loading.
+- Added typed `UnknownSkillError` and `InvalidSkillActivationError`.
+- Added ordinary `LoadSkillTool` with strict `{ name: string }` schema and `additionalProperties: false`.
+- Kept `load_skill` ToolResults compact: activation acknowledgements contain no full Skill instructions.
+- Preserved the progressive-disclosure path: full bodies stay in ActiveSkillStore and become model-visible only through `createLoadedSkillSupplement()` on the next context preparation.
+- Added activation tests for normalized idempotency, loader call count, unknown names, cancellation, clone semantics, deterministic ordering, clear, and active-supplement conversion.
+- Added `load_skill` tests for schema, compact acknowledgements, no full-body leakage, repeated activation, invalid direct arguments, unknown names, and cancellation.
+- Strict TypeScript source-subset compilation and activation runtime smoke passed; the full repository Vitest suite is not claimed as run in the current execution environment.
+
 ## v0.4.4
 
 - Added generic `ContextSupplement` model-only context material with deterministic validation/rendering.
@@ -70,47 +84,24 @@
 
 ## v0.3.6
 
-- Added `ContextSummarizer` and `ContextSummarizerInput/Result` contracts.
-- Added deterministic offline `DeterministicContextSummarizer` for network-independent mechanism testing.
-- Added `ProgressiveSummaryPolicy` that advances checkpoints from the previous coverage boundary using only newly covered durable history.
-- Required checkpoint coverage boundaries to align with the end of complete `ContextUnit`s, preventing summaries from cutting through tool exchanges.
-- Added explicit no-op behavior for same-boundary advancement.
-- Added failure-atomic commit ordering so summarizer failure or cancellation before `SummaryStore.put()` leaves the previous checkpoint unchanged.
-- Added `InvalidSummaryCoverageBoundaryError` and `SummaryGenerationError`.
-- Added tests for first checkpoint creation, incremental advancement, no-op, coverage regression, tool-exchange boundaries, failure atomicity, durable-history immutability, Unicode-safe deterministic summarization, and cancellation before commit.
+- Added `ContextSummarizer` and deterministic offline summarization contracts.
+- Added `ProgressiveSummaryPolicy`, atomic checkpoint advancement, boundary validation, and cancellation/failure safety.
 
 ## v0.3.5
 
-- Added explicit `ContextSummary` checkpoint artifacts with stable identity, content, prefix coverage, estimated tokens, and creation time.
-- Defined `coversThroughMessageIndex=N` to mean the summary covers durable history prefix `[0..N]`.
-- Added `SummaryStore` and deterministic `InMemorySummaryStore` reference implementation.
-- Kept summary checkpoints separate from durable `AgentMessage[]` history and SessionStore semantics.
-- Added clone-on-read/write behavior to avoid accidental shared-reference mutation.
-- Added monotonic coverage enforcement with `SummaryCoverageRegressionError` while allowing same-boundary regeneration/retry.
-- Added `InvalidContextSummaryError` and validation helpers.
-- Added tests for checkpoint validation, prefix coverage, copy semantics, forward coverage, same-boundary replacement, clear, and regression rejection.
+- Added explicit `ContextSummary` checkpoint artifacts and `SummaryStore` with monotonic coverage semantics.
 
 ## v0.3.4
 
-- Added `ContextPlanner`, `ContextPlannerInput`, `PreparedContext`, and structured `ContextProvenance`.
-- Added `KeepRecentContextPlanner` as the first budgeted model-context construction policy.
-- Composed context units, tool-result reduction, token estimation, and resolved budgets into one deterministic pipeline.
-- Selected a chronological contiguous suffix of complete units under budget.
-- Rejected incomplete trailing tool exchanges before provider-context preparation.
-- Failed explicitly when the system prompt or newest atomic unit cannot fit the resolved input budget.
-- Added reduction provenance for model-visible ToolResult projections while preserving durable history unchanged.
-- Added cancellation checks around context preparation.
+- Added `ContextPlanner`, `PreparedContext`, provenance, budgeted KeepRecent selection, and ToolResult projection integration.
 
 ## v0.3.3
 
-- Added `ToolResultReducer` and deterministic `HeadTailToolResultReducer`.
-- Added explicit model-context reduction metadata and Unicode-safe head/tail reduction.
-- Preserved durable ToolResult identity/content while producing model-visible copies.
+- Added `ToolResultReducer` and deterministic Unicode-safe model-only observation reduction.
 
 ## v0.3.2
 
-- Added `ContextUnit` modeling and `ToolExchangeContextUnit` atomicity.
-- Added explicit support for trailing in-progress exchanges and invalid-history errors.
+- Added `ContextUnit` modeling and ToolExchange atomicity.
 
 ## v0.3.1
 
