@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.3.5
+
+- Added explicit `ContextSummary` checkpoint artifacts with stable identity, content, prefix coverage, estimated tokens, and creation time.
+- Defined `coversThroughMessageIndex=N` to mean the summary covers durable history prefix `[0..N]`.
+- Added `SummaryStore` and deterministic `InMemorySummaryStore` reference implementation.
+- Kept summary checkpoints separate from durable `AgentMessage[]` history and SessionStore semantics.
+- Added clone-on-read/write behavior to avoid accidental shared-reference mutation.
+- Added monotonic coverage enforcement with `SummaryCoverageRegressionError` while allowing same-boundary regeneration/retry.
+- Added `InvalidContextSummaryError` and validation helpers.
+- Added tests for checkpoint validation, prefix coverage, copy semantics, forward coverage, same-boundary replacement, clear, and regression rejection.
+- Kept LLM summarization and AgentLoop integration out of this stage; both remain later v0.3 work.
+
 ## v0.3.4
 
 - Added `ContextPlanner`, `ContextPlannerInput`, `PreparedContext`, and structured `ContextProvenance`.
