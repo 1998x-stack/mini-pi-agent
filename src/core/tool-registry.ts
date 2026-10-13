@@ -1,6 +1,14 @@
-import { ToolValidationError, UnknownToolError } from "./errors.js";
+import {
+  ToolAlreadyRegisteredError,
+  ToolValidationError,
+  UnknownToolError
+} from "./errors.js";
 import type { Tool } from "./tool.js";
 import type { JsonValue } from "./types.js";
+
+export interface ToolRegistration {
+  dispose(): void;
+}
 
 export class ToolRegistry {
   private readonly tools = new Map<string, Tool>();
@@ -9,11 +17,22 @@ export class ToolRegistry {
     for (const tool of initialTools) this.register(tool);
   }
 
-  register(tool: Tool): void {
+  register(tool: Tool): ToolRegistration {
     if (this.tools.has(tool.name)) {
-      throw new Error(`Tool already registered: ${tool.name}`);
+      throw new ToolAlreadyRegisteredError(tool.name);
     }
     this.tools.set(tool.name, tool);
+
+    let disposed = false;
+    return {
+      dispose: () => {
+        if (disposed) return;
+        disposed = true;
+        if (this.tools.get(tool.name) === tool) {
+          this.tools.delete(tool.name);
+        }
+      }
+    };
   }
 
   replace(tool: Tool): void {
