@@ -21,3 +21,18 @@ export class ContextBudgetExceededError extends ContextError {
 export class InvalidContextHistoryError extends ContextError {}
 
 export class InvalidToolResultReductionOptionsError extends ContextError {}
+
+export class InvalidContextSummaryError extends ContextError {}
+
+export class SummaryCoverageRegressionError extends ContextError {
+  readonly previousCoverage: number;
+  readonly nextCoverage: number;
+
+  constructor(previousCoverage: number, nextCoverage: number) {
+    super(
+      `summary coverage cannot move backward: previous=${previousCoverage}, next=${nextCoverage}`
+    );
+    this.previousCoverage = previousCoverage;
+    this.nextCoverage = nextCoverage;
+  }
+}
