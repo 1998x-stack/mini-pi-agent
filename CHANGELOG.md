@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.3.3
+
+- Added `ToolResultReducer` and deterministic `HeadTailToolResultReducer`.
+- Added explicit model-context reduction metadata: original, kept-head, kept-tail, visible, and omitted character counts.
+- Added validated reduction options with `InvalidToolResultReductionOptionsError`.
+- Preserved `toolCallId`, `toolName`, `isError`, and timestamp identity in model-visible copies.
+- Counted and sliced content by Unicode code point to avoid breaking surrogate pairs.
+- Kept durable `ToolResultMessage` content immutable; reduction only produces a model-visible projection.
+- Added tests for small results, large results, error results, Unicode safety, determinism, and invalid options.
+- Kept AgentLoop unchanged; planner integration remains for v0.3.4+.
+
 ## v0.3.2
 
 - Added `ContextUnit` modeling for user, assistant, and tool-exchange history.
