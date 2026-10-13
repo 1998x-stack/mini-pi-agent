@@ -1,32 +1,32 @@
-# v0.3 Context Architecture
+# v0.3 Context Architecture — Implemented Reference
 
-This document defines the target architecture for the `v0.3` branch.
+## 1. Architectural objective
 
----
-
-# 1. Architectural objective
-
-The v0.3 subsystem must let the runtime answer:
-
-```text
-Given complete durable history H
-and finite model budget B,
-what bounded context C should the model see now?
-```
-
-subject to:
+Given complete durable history `H` and finite model budget `B`, derive a bounded model context `C` such that:
 
 ```text
 C preserves protocol validity
-C preserves important recent state
+C preserves useful recent state
 C is explainable
 C does not mutate H
 C fits B or fails explicitly
 ```
 
+The central separation is:
+
+```text
+Runtime State
+≠
+Durable Session History
+≠
+Prepared Model Context
+≠
+Summary Checkpoint
+```
+
 ---
 
-# 2. System view
+## 2. Final system view
 
 ```text
                          Agent
@@ -34,37 +34,33 @@ C fits B or fails explicitly
                            ▼
                     runAgentLoop()
                            │
-                           │ complete history
                            ▼
-                    ContextPlanner
-            ┌──────────────┼──────────────┐
-            ▼              ▼              ▼
-     ContextUnitBuilder TokenEstimator ToolResultReducer
-            │              │              │
-            └──────────────┼──────────────┘
-                           ▼
-                  CompactionPolicy
-                    ┌──────┴──────┐
-                    ▼             ▼
-              Recent units   SummaryStore
-                                  │
-                                  ▼
-                          ContextSummarizer
-                           │
-                           ▼
-                    PreparedContext
-                           │
-                           ▼
-                     LLMProvider
+                    ContextRuntime
+                 ┌─────────┼─────────┐
+                 ▼         ▼         ▼
+           SummaryStore  Planner  SummaryPolicy
+                 │         │         │
+                 │         │         └── ContextSummarizer
+                 │         │
+                 │         ├── ContextUnitBuilder
+                 │         ├── TokenEstimator
+                 │         └── ToolResultReducer
+                 │
+                 └──────────────┐
+                                ▼
+                       PreparedContext
+                                │
+                                ▼
+                         LLMProvider
 
-Durable SessionStore remains outside compaction mutation.
+SessionStore remains the complete durable-message store.
 ```
+
+`ContextRuntime` is orchestration, not storage. It never owns or rewrites durable messages.
 
 ---
 
-# 3. Dependency direction
-
-Preferred dependency direction:
+## 3. Dependency direction
 
 ```text
 core AgentMessage types
@@ -74,526 +70,371 @@ context data contracts
         ▲
         │
 small mechanisms
-(estimator / units / reducer / summary store)
+(budget / estimator / units / reducer / summary store)
         ▲
         │
 policies
+(keep-recent / progressive-summary)
         ▲
         │
-ContextPlanner orchestration
+ContextRuntime
         ▲
         │
-Agent loop
+AgentLoop
 ```
 
-Forbidden directions:
+Forbidden coupling:
 
 ```text
-context -> CLI
+context -> CLI rendering
 context -> JSONL implementation details
-context -> OpenAI HTTP details
-context -> Skill implementation
-context -> MCP implementation
+context -> provider HTTP wire format
+context -> Skills
+context -> MCP
 ```
 
 ---
 
-# 4. Core data contracts
-
-## 4.1 ContextBudget
+## 4. Budget model
 
 ```ts
-export interface ContextBudget {
+interface ContextBudget {
   contextWindow: number;
   outputReserve: number;
   safetyMargin: number;
 }
 ```
 
-Invariant:
+Derived centrally:
 
 ```text
-contextWindow > 0
-outputReserve >= 0
-safetyMargin >= 0
-outputReserve + safetyMargin < contextWindow
+inputBudget = contextWindow - outputReserve - safetyMargin
 ```
 
-Derived:
-
-```ts
-inputBudget = contextWindow - outputReserve - safetyMargin;
-```
-
-Keep the arithmetic centralized.
+Impossible configurations fail before planning.
 
 ---
 
-## 4.2 TokenEstimator
+## 5. Token estimation
 
 ```ts
-export interface TokenEstimator {
+interface TokenEstimator {
   estimateText(text: string): number;
+  estimateSystem(text: string): number;
   estimateMessage(message: AgentMessage): number;
   estimateMessages(messages: readonly AgentMessage[]): number;
 }
 ```
 
-The estimator is intentionally a contract so that:
+`ApproximateTokenEstimator` is deterministic and network-independent. A future provider-specific estimator can replace it without changing planner semantics.
+
+---
+
+## 6. Causal context units
+
+The builder lifts raw history into semantic units:
 
 ```text
-ApproximateTokenEstimator
-ProviderSpecificEstimator
-TestEstimator
+UserMessage                       → UserContextUnit
+AssistantMessage(no tool calls)   → AssistantContextUnit
+AssistantMessage(tool calls)
+  + matching ToolResultMessage[]  → ToolExchangeContextUnit
 ```
-
-can be swapped without changing planning logic.
-
----
-
-## 4.3 ContextUnit
-
-Conceptual representation:
-
-```ts
-export interface ContextUnitBase {
-  id: string;
-  sourceMessageIndexes: readonly number[];
-  estimatedTokens: number;
-}
-
-export type ContextUnit =
-  | UserUnit
-  | AssistantTextUnit
-  | ToolExchangeUnit
-  | SummaryUnit;
-```
-
-The precise union fields may evolve, but every unit should carry enough source provenance to explain reconstruction.
-
----
-
-## 4.4 ToolExchangeUnit
-
-Target shape:
-
-```ts
-export interface ToolExchangeUnit extends ContextUnitBase {
-  kind: "tool-exchange";
-  assistant: AssistantMessage;
-  results: ToolResultMessage[];
-}
-```
-
-Rules:
-
-- each visible tool call should have a matching visible result unless the exchange is explicitly incomplete/current;
-- duplicate tool-call IDs are invalid;
-- orphan results are detectable;
-- result order should follow original call order for model visibility.
-
----
-
-## 4.5 PreparedContext
-
-```ts
-export interface PreparedContext {
-  systemPrompt: string;
-  messages: AgentMessage[];
-  estimatedInputTokens: number;
-  compacted: boolean;
-  provenance: ContextProvenance;
-}
-```
-
-`PreparedContext` is ephemeral and provider-facing.
-
-It must not be appended as if it were durable conversational truth.
-
----
-
-# 5. Context provenance
-
-Recommended provenance model:
-
-```ts
-export interface ContextProvenance {
-  originalMessageCount: number;
-  originalEstimatedTokens: number;
-  selectedMessageCount: number;
-  selectedEstimatedTokens: number;
-  reducedToolResults: number;
-  summaryId?: string;
-  omittedSourceRanges: Array<{ start: number; end: number }>;
-}
-```
-
-The goal is not perfect audit metadata in v0.3. The goal is to make planner decisions inspectable.
-
----
-
-# 6. ContextUnitBuilder
-
-Responsibility:
-
-```text
-AgentMessage[]
-      ↓
-validate protocol relations
-      ↓
-ContextUnit[]
-```
-
-Pseudo-flow:
-
-```ts
-for message in history:
-  if user:
-    flush simple unit
-
-  if assistant without tools:
-    create assistant-text unit
-
-  if assistant with tool calls:
-    collect expected tool ids
-    collect following matching tool results
-    create one tool-exchange unit
-
-  if orphan tool result:
-    report invalid history or explicit incomplete state
-```
-
-The builder should not decide which units to keep.
 
 Mechanism vs policy:
 
 ```text
-UnitBuilder = what belongs together
-Planner policy = what to keep
+ContextUnitBuilder = what belongs together
+ContextPlanner     = which complete units stay visible
 ```
+
+Complete tool exchanges are atomic for both prepared context selection and summary coverage boundaries.
 
 ---
 
-# 7. ToolResultReducer
+## 7. Large observation projection
 
-Architecture:
-
-```text
-ToolResultMessage
-      ↓
-estimate size
-      ↓
-small? ── yes ──► unchanged
-      │
-      no
-      ↓
-head / omission marker / tail
-      ↓
-reduced ToolResultMessage
-```
-
-Recommended explicit marker:
+`HeadTailToolResultReducer` produces a model-only copy:
 
 ```text
-[mini-pi-agent context reduction]
-original_chars=245812
-kept_head_chars=8000
-kept_tail_chars=8000
+[mini-pi-agent tool result reduced for model context]
+original_chars=...
+kept_head_chars=...
+kept_tail_chars=...
+omitted_chars=...
+
+--- head ---
+...
+--- omitted N chars ---
+--- tail ---
+...
 ```
 
-Never pretend the reduced text is the complete original.
-
-The reducer must be pure with respect to durable input: return a new message rather than mutate the original object.
+The source `ToolResultMessage` is never mutated.
 
 ---
 
-# 8. Summary architecture
-
-Summary pipeline:
-
-```text
-eligible old ContextUnit[]
-         ↓
-SummaryInput
-         ↓
-ContextSummarizer
-         ↓
-ContextSummary
-         ↓
-SummaryStore
-```
-
-Recommended contract:
+## 8. PreparedContext
 
 ```ts
-export interface SummaryInput {
-  previousSummary?: ContextSummary;
-  units: readonly ContextUnit[];
-  signal: AbortSignal;
-}
-
-export interface ContextSummarizer {
-  summarize(input: SummaryInput): Promise<ContextSummary>;
+interface PreparedContext {
+  systemPrompt: string;
+  messages: AgentMessage[];
+  estimatedInputTokens: number;
+  compacted: boolean;
+  budget: ResolvedContextBudget;
+  provenance: ContextProvenance;
 }
 ```
 
-A deterministic summarizer must exist for tests.
+`PreparedContext` is ephemeral/provider-facing. It is never appended to session history.
 
 ---
 
-# 9. Summary identity and coverage
-
-The summary should record what it covers.
-
-Initial v0.3 may use:
-
-```ts
-coveredThroughMessageIndex: number;
-```
-
-but the architecture should avoid assuming array indexes are permanent global IDs.
-
-Reason: v0.7 will introduce parent-linked session history and branches.
-
-Design preference:
+## 9. KeepRecent reference policy
 
 ```text
-v0.3: simple cursor abstraction
-v0.7: branch-aware historical identity
-```
-
-rather than hard-coding raw indexes throughout the public API.
-
----
-
-# 10. Policy layering
-
-Do not create one giant planner with all decisions intertwined.
-
-Suggested policy layers:
-
-```text
-ContextPlanner
-   │
-   ├── FullContextPolicy
-   ├── KeepRecentPolicy
-   └── ProgressiveSummaryPolicy
-```
-
-Common mechanisms stay shared:
-
-```text
-estimation
-unit construction
-result reduction
-summary store
-```
-
-This lets examples compare policies while preserving the same underlying contracts.
-
----
-
-# 11. Reference planning algorithm
-
-Readable baseline:
-
-```text
-INPUT
-system prompt
 history
-budget
-
-1. validate budget
-2. build context units
-3. estimate full candidate
-4. if fits -> return full candidate
-5. reduce oversized tool results
-6. estimate again
-7. if fits -> return reduced candidate
-8. reserve recent units from newest backwards
-9. determine older eligible prefix
-10. load/reuse summary if possible
-11. summarize newly old units when necessary
-12. combine summary + recent units
-13. verify final estimate
-14. if still too large -> typed budget error
-15. return PreparedContext + provenance
+  ↓
+build complete units
+  ↓
+reduce large ToolResults in copies
+  ↓
+estimate units
+  ↓
+walk newest → oldest
+  ↓
+stop at first non-fitting older unit
+  ↓
+restore chronological order
+  ↓
+PreparedContext
 ```
 
-This is intentionally explicit and not optimized prematurely.
+The policy chooses one contiguous recent suffix. It does not skip middle history merely to maximize packing density.
 
 ---
 
-# 12. Impossible-budget cases
+## 10. Summary model
 
-The planner should distinguish cases:
+```ts
+interface ContextSummary {
+  id: string;
+  content: string;
+  coversThroughMessageIndex: number;
+  estimatedTokens: number;
+  createdAt: number;
+}
+```
+
+Coverage means the complete durable prefix `[0..N]`.
+
+`SummaryStore` is independent from `SessionStore` because summaries are derived/regenerable checkpoints rather than conversational truth.
+
+---
+
+## 11. Progressive summary policy
 
 ```text
-A. invalid budget configuration
-B. system prompt alone exceeds input budget
-C. one mandatory recent unit exceeds remaining budget
-D. summarizer output itself is too large
-E. estimator/planner internal inconsistency
+history[0..100] → S1
+S1 + history[101..170] → S2
+S2 + history[171..240] → S3
 ```
 
-These should not all become generic `Error("context too large")`.
-
-Recommended error hierarchy:
-
-```ts
-ContextError
-├── InvalidContextBudgetError
-├── ContextBudgetExceededError
-├── InvalidContextHistoryError
-└── SummaryGenerationError
-```
-
-Keep the hierarchy small but meaningful.
-
----
-
-# 13. Events
-
-Context planning should be observable through existing runtime events or a focused event extension.
-
-Recommended events:
-
-```ts
-context_prepare_start
-context_tool_result_reduced
-context_summary_start
-context_summary_end
-context_prepare_end
-context_prepare_error
-```
-
-Useful fields:
+Policy owns:
 
 ```text
-runId
-turn
-estimatedBefore
-estimatedAfter
-budget
-summaryId
-reducedCount
+coverage boundary validation
+monotonicity
+new-history range calculation
+candidate commit ordering
 ```
 
-Avoid emitting the full private prompt/context by default.
+Summarizer owns only content generation.
+
+Failure-atomic sequence:
+
+```text
+read previous checkpoint
+      ↓
+generate candidate
+      ↓
+validate / estimate
+      ↓
+abort check
+      ↓
+SummaryStore.put()
+```
+
+Failure or cancellation before `put()` leaves the previous checkpoint intact.
 
 ---
 
-# 14. Agent-loop integration
+## 12. ContextRuntime
 
-Desired loop diff conceptually:
+`ContextRuntime` composes the already-independent mechanisms.
+
+Reference algorithm:
+
+```text
+load latest summary
+      ↓
+tailStart = summary.coverage + 1
+      ↓
+render base system + checkpoint block
+      ↓
+planner.prepare(durable tail)
+      ↓
+omitted unsummarized units?
+  ├── no  → stable PreparedContext
+  └── yes → summaryPolicy.advance(omitted complete prefix)
+                ↓
+             re-plan
+```
+
+The loop is bounded by `maxSummaryPasses` and fails explicitly if it cannot converge.
+
+The latest user request is never silently summarized away merely to make the request fit; if the newest atomic unit cannot fit, planning fails.
+
+---
+
+## 13. Summary visibility
+
+A checkpoint is not a fake conversation message.
+
+Provider input is:
+
+```text
+systemPrompt
+  = base system prompt
+  + explicit summary checkpoint block
+
+messages
+  = recent prepared AgentMessage[] tail
+```
+
+Meanwhile:
+
+```text
+state.messages = complete durable history
+SessionStore   = complete durable history
+SummaryStore   = derived checkpoint
+```
+
+---
+
+## 14. AgentLoop integration
+
+The core loop only asks for prepared model input:
 
 ```ts
-const prepared = await contextPlanner.prepare({
-  systemPrompt,
+const context = await contextRuntime.prepare({
+  systemPrompt: state.systemPrompt,
   history: state.messages,
-  budget,
   signal
 });
 
 const request = {
-  systemPrompt: prepared.systemPrompt,
-  messages: prepared.messages,
+  systemPrompt: context.prepared.systemPrompt,
+  messages: context.prepared.messages,
   tools,
   signal
 };
 ```
 
-The loop should not know:
+`runAgentLoop()` does not implement:
 
 ```text
-how token estimation works
-which tool results were reduced
-how summaries are produced
-which old units were omitted
+token estimation
+ToolResult reduction
+summary generation
+summary coverage selection
+checkpoint persistence
 ```
 
-This preserves the small-loop invariant.
+This preserves the readable-loop invariant.
 
 ---
 
-# 15. Session-store relationship
+## 15. Lifecycle events
 
-Current `SessionStore`:
-
-```ts
-load(): Promise<AgentMessage[]>;
-append(message: AgentMessage): Promise<void>;
-clear(): Promise<void>;
-```
-
-v0.3 does not require converting the session store into a DAG.
-
-Rules:
+Implemented context events:
 
 ```text
-SessionStore owns durable messages.
-SummaryStore owns derived summary checkpoints.
-ContextPlanner reads both.
-ContextPlanner mutates neither historical message content nor session ordering.
+context_prepare_start
+context_summary_advanced
+context_prepared
 ```
 
-Later v0.7 may unify or relate their persistence models more deeply.
+They expose counts/coverage/estimates, not complete private prompt contents.
 
 ---
 
-# 16. Backward compatibility
+## 16. Backward compatibility
 
-The v0.1 `ContextTransform` API can be handled in one of two ways during implementation:
+`AgentOptions.context` enables `ContextRuntime`.
 
-```text
-Option A: adapter wraps old ContextTransform as ContextPlanner
-Option B: migrate callers atomically and deprecate ContextTransform
-```
+The old `ContextTransform` remains a compatibility/teaching seam when the new context runtime is absent.
 
-Choose based on implementation clarity, not compatibility for its own sake.
-
-Whichever path is chosen must be documented in `CHANGELOG.md`.
+The two configuration paths are mutually exclusive.
 
 ---
 
-# 17. Architectural invariants
-
-A correct v0.3 implementation must preserve all of these:
+## 17. Persistence relationship
 
 ```text
-1. durable history is never silently shortened by planning
-2. provider receives PreparedContext, not direct session storage
-3. protocol-related messages remain semantically valid
-4. large result reduction is explicit
-5. estimates are deterministic for a fixed estimator/input
+SessionStore
+  owns durable messages
+
+SummaryStore
+  owns derived checkpoints
+
+ContextRuntime / ContextPlanner
+  read projections
+  never rewrite historical truth
+```
+
+v0.7 may later replace raw array indexes with branch-aware history identities.
+
+---
+
+## 18. Core v0.3 invariants
+
+```text
+1. durable history is never silently shortened
+2. provider receives prepared context, not raw lifetime history
+3. tool-call/result causal relations remain valid
+4. large observation reduction is explicit
+5. estimates are deterministic for fixed estimator/input
 6. impossible budgets fail explicitly
 7. summarization is cancellable
-8. summaries have provenance
-9. no live LLM is required for core tests
-10. AgentLoop stays free of compaction strategy branches
+8. checkpoints have explicit monotonic coverage
+9. failed summary generation is commit-atomic
+10. no live LLM is required for reference tests
+11. AgentLoop stays free of compaction implementation details
 ```
 
 ---
 
-# 18. Future compatibility
+## 19. Future compatibility
 
 This architecture intentionally prepares for:
 
 ```text
 v0.4 Skills
-  -> context supplements
+  → additional context/instruction sources
 
 v0.5 Extensions
-  -> before/after context hooks
+  → before/after context lifecycle hooks
 
-v0.6 MCP Resources/Prompts
-  -> additional context sources
+v0.6 MCP
+  → remote tools/resources/prompts
 
 v0.7 Session Branching
-  -> branch-specific summary checkpoints
+  → branch-specific checkpoint identity
 
 v0.9 RPC
-  -> inspectable context planning across process boundary
+  → inspectable context preparation across processes
 ```
 
-v0.3 should enable these later versions without implementing them early.
+Those capabilities are not implemented in v0.3.
