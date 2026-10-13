@@ -6,215 +6,37 @@ Primary invariant:
 
 Secondary invariant:
 
-> Full Skill bodies are loaded and exposed progressively rather than globally injected.
+> Full Skill bodies are exposed progressively rather than globally injected.
 
----
-
-## v0.4.1 — Skill manifest parser + core types ✅ implemented
-
-Implemented the minimal `SkillManifest`, `ParsedSkillDocument`, typed manifest errors, and pure `parseSkillDocument()`.
-
----
-
-## v0.4.2 — ProjectSkillSource + SkillRegistry ✅ implemented
-
-Implemented descriptor-only project discovery from `<cwd>/.mini-pi/skills/*/SKILL.md` and deterministic normalized-name registry semantics.
-
----
-
-## v0.4.3 — SkillLoader + root/path validation ✅ implemented
-
-Implemented safe on-demand loading of exactly one selected `SKILL.md`, including lexical/canonical containment, symlink rejection, identity-drift detection, descriptor cloning, and cancellation propagation.
-
----
-
-## v0.4.4 — Catalog renderer + context supplement seam ✅ implemented
-
-Implemented compact descriptor catalogs and active Skill context through generic `ContextSupplement[]` rendered before ContextPlanner budgeting.
-
----
-
-## v0.4.5 — Run-scoped activation + `load_skill` adapter ✅ implemented
-
-### Goal
-
-Allow model-driven Skill activation while reusing the ordinary ToolCall → ToolResult feedback loop without duplicating full Skill bodies into durable tool history.
-
-### Implemented
+## Completed
 
 ```text
-src/skills/active-store.ts
+v0.4.1  Skill manifest parser + core types                   ✅
+v0.4.2  ProjectSkillSource + SkillRegistry                  ✅
+v0.4.3  SkillLoader + path/root validation                  ✅
+v0.4.4  catalog renderer + ContextSupplement seam           ✅
+v0.4.5  run-scoped activation + load_skill adapter          ✅
+v0.4.6  references boundary + events + manual activation    ✅
+```
+
+## v0.4.6 — References + events + manual activation ✅
+
+Implemented:
+
+```text
+src/skills/events.ts
+src/skills/manual-activation.ts
 src/skills/activation-service.ts
 src/skills/load-skill-tool.ts
-src/skills/errors.ts
 src/skills/index.ts
 
-tests/skill-activation.test.ts
-tests/load-skill-tool.test.ts
-```
-
-### Active state contract
-
-```ts
-interface ActiveSkillStore {
-  list(): readonly LoadedSkill[];
-  get(name: string): LoadedSkill | undefined;
-  activate(skill: LoadedSkill): LoadedSkill;
-  clear(): void;
-}
-
-class InMemoryActiveSkillStore implements ActiveSkillStore
-```
-
-Reference semantics:
-
-- normalized identity is `trim + lowercase`;
-- repeated activation is idempotent;
-- first active body wins for the store lifetime;
-- `list()` is deterministic;
-- `get()` / `list()` / `activate()` return safe clones;
-- metadata is cloned rather than shared;
-- `clear()` is the explicit run-scope reset primitive.
-
-### Shared activation service
-
-```ts
-class SkillActivationService {
-  activate(name: string, signal: AbortSignal): Promise<SkillActivationResult>;
-}
-```
-
-Flow:
-
-```text
-requested Skill name
-      ↓
-ActiveSkillStore.get()
-      ↓ not active
-SkillRegistry.get()
-      ↓
-SkillLoader.load()
-      ↓ async boundary
-ActiveSkillStore.get() again
-      ↓
-ActiveSkillStore.activate()
-```
-
-The second store check handles two activations that finish close together: once another call has committed active state, the later call returns `already-active` instead of incorrectly reporting first activation.
-
-Sequential repeated activation does not call the loader again.
-
-Unknown names fail through:
-
-```text
-UnknownSkillError
-```
-
-Cancellation is propagated before lookup/loading and after loader completion.
-
-### `load_skill` Tool adapter
-
-```ts
-class LoadSkillTool implements Tool
-```
-
-Tool schema:
-
-```json
-{
-  "type": "object",
-  "properties": {
-    "name": { "type": "string" }
-  },
-  "required": ["name"],
-  "additionalProperties": false
-}
-```
-
-Direct invalid calls also fail through:
-
-```text
-InvalidSkillActivationError
-```
-
-Compact ToolResult semantics:
-
-```text
-Skill 'code-review' activated.
-
-Skill 'code-review' is already active.
-```
-
-The adapter never returns full `SKILL.md` instructions.
-
-Required data flow:
-
-```text
-load_skill ToolResult
-→ compact durable acknowledgement only
-
-ActiveSkillStore
-→ LoadedSkill body
-→ createLoadedSkillSupplement()
-→ next ContextRuntime.prepare()
-```
-
-This avoids duplicate full bodies in durable history and active model context.
-
-### Verification performed
-
-Strict TypeScript source-subset compilation passed under:
-
-```text
-strict
-noUncheckedIndexedAccess
-exactOptionalPropertyTypes
-```
-
-Runtime smoke verified:
-
-```text
-20KB full Skill body
-→ first activation loads once
-→ ToolResult length = 30 chars
-→ full body absent from ToolResult
-→ full body present in active-skill supplement
-
-second normalized activation
-→ status = already-active
-→ loader calls remain 1
-
-store reads
-→ clones
-
-clear()
-→ no active Skills
-```
-
-The full repository Vitest suite is not claimed as run in the current execution environment.
-
----
-
-## v0.4.6 — References + events + manual activation surface ← next
-
-### Goal
-
-Complete the observable Skill lifecycle while keeping references/scripts on ordinary tool paths and ensuring explicit/manual activation shares the same activation service as model-driven `load_skill`.
-
-### Add/update
-
-```text
-src/core/events.ts
-src/skills/activation-service.ts or a thin explicit activation facade
-src/core/agent.ts only if a generic explicit activation entry point is needed
-examples/08-skill-manual-activation.ts
-
 tests/skill-events.test.ts
+examples/08-skill-manual-activation.ts
 ```
 
-### Lifecycle event target
+### Lifecycle events
 
-Events should expose metadata only, for example:
+Metadata-only event contract:
 
 ```text
 skill_activation_start
@@ -223,50 +45,109 @@ skill_activation_reused
 skill_activation_failed
 ```
 
-Do not emit full Skill instructions by default.
-
-### Explicit activation rule
-
-Manual activation must call the same:
+Origins:
 
 ```text
-SkillActivationService.activate()
+api | manual | tool
 ```
 
-used by `load_skill`.
+Events may include name, normalized name, manifest path, and compact error name/message. They never include `LoadedSkill.instructions`.
 
-A second Skill runtime is forbidden.
+`SkillEventBus` isolates listener failures so observation cannot alter activation semantics.
 
-### References/scripts rule
+### Shared activation path
 
 ```text
-Skill instructions mention references/foo.md
-      ↓
-model uses ordinary read tool
-
-Skill instructions mention scripts/check.mjs
-      ↓
-model explicitly uses ordinary shell/tool path
+load_skill Tool
+      ┐
+      ├→ SkillActivationService → ActiveSkillStore
+      │
+ManualSkillActivator
+      ┘
 ```
 
-No hidden auto-read or auto-execution channel is introduced.
+`ManualSkillActivator` is only a thin origin-marking facade; it owns no registry, loader, or store.
+
+### Reference/script boundary
+
+No new resource execution protocol exists.
+
+```text
+references/*.md
+→ ordinary read/file ToolCall only
+
+scripts/*
+→ ordinary explicit shell/execution ToolCall only
+```
+
+Activation and loading still touch only the selected `SKILL.md`.
+
+### Verification
+
+Strict TypeScript source-subset checking passed with `strict`, `noUncheckedIndexedAccess`, and `exactOptionalPropertyTypes`.
+
+Runtime smoke verified one shared store/service across manual and tool-origin activation, normalized idempotency, one loader call, metadata-only events, and listener-failure isolation.
+
+The full repository Vitest suite is not claimed as run in the current execution environment.
+
+---
+
+## v0.4.7 — Agent integration + examples + 0.4.0 freeze ← next
+
+### Goal
+
+Integrate the complete Skills lifecycle with `Agent` while keeping `AgentLoop` generic and freezing an end-to-end educational snapshot.
+
+### Add/update
+
+```text
+src/core/agent.ts
+src/core/agent-loop.ts only if a generic supplement-provider seam is needed
+src/core/events.ts for bridged Agent-level Skill metadata events
+src/index.ts
+README.md
+package.json
+src/version.ts
+version.md
+CHANGELOG.md
+examples/09-progressive-skills.ts
+tests/agent-skills-integration.test.ts
+```
+
+### Target run lifecycle
+
+```text
+Agent.prompt() starts
+      ↓
+clear ActiveSkillStore
+      ↓
+compact Skill catalog supplied to context
+      ↓
+load_skill available as ordinary tool
+      ↓
+model activates one Skill
+      ↓
+next provider request contains active Skill supplement
+      ↓
+other Skill bodies remain unloaded/unexposed
+      ↓
+run ends
+      ↓
+active state clears before next run
+```
 
 ### Must prove
 
-- lifecycle events distinguish new vs reused activation;
-- events expose names/status/path metadata, not full body;
-- manual and model-driven activation converge on one ActiveSkillStore;
-- references are not implicitly loaded;
-- scripts are not implicitly executed;
-- cancellation/failure events preserve useful metadata without leaking instructions.
-
----
-
-## v0.4.7 — Agent integration + examples + freeze
-
-Prove the complete progressive-disclosure run lifecycle, clear active Skills between Agent runs, finalize package/runtime version `0.4.0`, update README/examples/docs, and freeze the branch.
-
----
+- Agent configuration can discover/register project Skills deterministically;
+- catalog is visible without loading all bodies;
+- `load_skill` uses the shared activation service;
+- active bodies appear only on turns after activation;
+- active state is per run and cleared between prompts;
+- Skill lifecycle events can be bridged to Agent observation without body leakage;
+- durable history contains ordinary tool calls/results, never ContextSupplements;
+- references/scripts retain ordinary tool-path semantics;
+- package/runtime version becomes `0.4.0` only after acceptance checks;
+- docs describe implemented architecture, not future targets.
 
 ## Final Definition of Done
 
@@ -279,12 +160,13 @@ Prove the complete progressive-disclosure run lifecycle, clear active Skills bet
 - [x] run-scoped ActiveSkillStore
 - [x] shared activation service
 - [x] `load_skill` adapter
-- [ ] references remain ordinary file-tool reads
-- [ ] scripts remain ordinary tool executions
-- [ ] Skill lifecycle events
-- [ ] shared manual activation surface
-- [ ] deterministic end-to-end tests
-- [ ] educational examples
+- [x] references remain ordinary file-tool reads
+- [x] scripts remain ordinary tool executions
+- [x] Skill lifecycle events
+- [x] shared manual activation surface
+- [ ] deterministic Agent end-to-end integration tests
+- [x] manual activation educational example
+- [ ] progressive Agent Skills example
 - [ ] package/version/docs finalization
 
 Only then freeze `v0.4`.
