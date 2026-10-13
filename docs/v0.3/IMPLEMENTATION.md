@@ -1,14 +1,14 @@
-# v0.3 Implementation Plan
+# v0.3 Implementation Plan — Complete
 
 Primary invariant:
 
 > Durable session history remains complete; model-visible context is a budgeted projection.
 
-The stages are intentionally ordered. Do not move compaction policy into `AgentLoop` before the lower-level context mechanisms are stable.
+This branch is now a completed historical learning snapshot.
 
 ---
 
-## v0.3.1 — ContextBudget + ApproximateTokenEstimator ✅ implemented
+## v0.3.1 — ContextBudget + ApproximateTokenEstimator ✅
 
 Implemented:
 
@@ -21,17 +21,11 @@ tests/context-budget.test.ts
 tests/token-estimator.test.ts
 ```
 
-Core formula:
-
-```text
-inputBudget = contextWindow - outputReserve - safetyMargin
-```
-
-Key invariant: capacity is explicit and deterministic before any selection policy exists.
+Proves explicit context capacity and deterministic replaceable estimation.
 
 ---
 
-## v0.3.2 — ContextUnitBuilder + ToolExchange atomicity ✅ implemented
+## v0.3.2 — ContextUnitBuilder + ToolExchange atomicity ✅
 
 Implemented:
 
@@ -40,19 +34,11 @@ src/context/units.ts
 tests/context-units.test.ts
 ```
 
-A tool exchange is one causal context unit:
-
-```text
-AssistantMessage(toolCalls)
-        +
-matching ToolResultMessage(s)
-```
-
-Complete exchanges cannot be split by later context selection. Invalid/orphan/duplicate tool history fails explicitly.
+Proves context policy operates on causal units rather than blindly slicing raw message arrays.
 
 ---
 
-## v0.3.3 — ToolResultReducer ✅ implemented
+## v0.3.3 — ToolResultReducer ✅
 
 Implemented:
 
@@ -61,11 +47,11 @@ src/context/tool-result-reducer.ts
 tests/tool-result-reducer.test.ts
 ```
 
-Reference policy: deterministic Unicode-safe head/tail projection. The durable `ToolResultMessage` remains unchanged; only the model-visible copy is reduced.
+Proves durable observation and model-visible observation can differ without mutating historical truth.
 
 ---
 
-## v0.3.4 — PreparedContext + KeepRecentPlanner ✅ implemented
+## v0.3.4 — PreparedContext + KeepRecentPlanner ✅
 
 Implemented:
 
@@ -77,10 +63,10 @@ src/context/policies/keep-recent.ts
 tests/context-planner.test.ts
 ```
 
-Pipeline:
+Reference pipeline:
 
 ```text
-durable history
+history
   ↓
 ContextUnitBuilder
   ↓
@@ -93,267 +79,223 @@ KeepRecentContextPlanner
 PreparedContext
 ```
 
-The reference policy selects one chronological contiguous suffix of complete units. It never silently truncates the system prompt or splits a causal exchange.
+The planner selects a chronological contiguous suffix of complete units and records provenance.
 
 ---
 
-## v0.3.5 — ContextSummary + SummaryStore ✅ implemented
+## v0.3.5 — ContextSummary + SummaryStore ✅
 
 Implemented:
 
 ```text
 src/context/summary.ts
 src/context/summary-store.ts
-src/context/errors.ts
-src/context/index.ts
 
 tests/context-summary.test.ts
 tests/summary-store.test.ts
 ```
 
-Checkpoint model:
+Checkpoint coverage has one precise meaning:
 
-```ts
-interface ContextSummary {
-  id: string;
-  content: string;
-  coversThroughMessageIndex: number;
-  estimatedTokens: number;
-  createdAt: number;
-}
+```text
+coversThroughMessageIndex = N
+→ summary covers durable prefix history[0..N]
 ```
 
-Coverage means the durable prefix `[0..N]`. `InMemorySummaryStore` keeps checkpoints separate from session history, clones on read/write, allows equal or forward coverage, and rejects coverage regression.
+Summary artifacts remain separate from SessionStore history.
 
 ---
 
-## v0.3.6 — ProgressiveSummaryPolicy + ContextSummarizer ✅ implemented
+## v0.3.6 — ProgressiveSummaryPolicy + ContextSummarizer ✅
 
-### Goal
-
-Advance old-history checkpoints incrementally instead of repeatedly summarizing the complete historical log.
-
-### Implemented
+Implemented:
 
 ```text
 src/context/summarizer.ts
 src/context/policies/progressive-summary.ts
-src/context/errors.ts
-src/context/index.ts
 
 tests/context-summarizer.test.ts
 tests/progressive-compaction.test.ts
 tests/context-cancellation.test.ts
 ```
 
-### ContextSummarizer contract
-
-```ts
-interface ContextSummarizerInput {
-  previousSummary?: ContextSummary;
-  messages: readonly AgentMessage[];
-  startMessageIndex: number;
-  endMessageIndex: number;
-  signal: AbortSignal;
-}
-
-interface ContextSummarizerResult {
-  content: string;
-}
-
-interface ContextSummarizer {
-  summarize(input: ContextSummarizerInput): Promise<ContextSummarizerResult>;
-}
-```
-
-The summarizer owns content generation only. It does not choose coverage boundaries and does not commit checkpoints.
-
-A deterministic offline reference implementation is included:
-
-```ts
-class DeterministicContextSummarizer implements ContextSummarizer
-```
-
-It exists to prove the mechanism without network/model access. Production callers can inject an LLM-backed implementation behind the same contract.
-
-### ProgressiveSummaryPolicy
-
-```ts
-class ProgressiveSummaryPolicy {
-  advance(input: AdvanceSummaryInput): Promise<ProgressiveSummaryResult>;
-}
-```
-
-Target progression:
+Progression:
 
 ```text
-history[0..100]
-      ↓
-     S1
-
-S1 + history[101..170]
-      ↓
-     S2
-
-S2 + history[171..240]
-      ↓
-     S3
+history[0..100] → S1
+S1 + history[101..170] → S2
+S2 + history[171..240] → S3
 ```
 
-The policy reads the latest checkpoint from `SummaryStore`, computes the newly covered range beginning at `previousCoverage + 1`, passes only that new range plus the previous checkpoint to `ContextSummarizer`, estimates the generated summary, and commits only after all validation/cancellation checks succeed.
+Important properties:
 
-### Coverage-boundary rule
-
-A checkpoint boundary must equal the `endIndex` of a complete `ContextUnit`.
-
-Therefore a target such as:
-
-```text
-Assistant(call_a, call_b)   index 10
-ToolResult(call_a)          index 11
-ToolResult(call_b)          index 12
-```
-
-may cover through `12`, but may not cover through `10` or `11`.
-
-This prevents a summary checkpoint from semantically cutting through a causal tool exchange.
-
-A trailing incomplete tool exchange also cannot become a checkpoint boundary.
-
-### No-op rule
-
-If requested coverage already equals the latest checkpoint coverage:
-
-```text
-requested = current
-```
-
-then the policy returns `status="unchanged"` and does not invoke the summarizer.
-
-### Failure atomicity
-
-The commit sequence is deliberately:
-
-```text
-read previous checkpoint
-      ↓
-validate target boundary
-      ↓
-generate candidate content
-      ↓
-check cancellation
-      ↓
-validate non-empty content
-      ↓
-estimate candidate
-      ↓
-check cancellation
-      ↓
-SummaryStore.put(candidate)
-```
-
-If generation throws or cancellation happens before `put()`, the previous checkpoint remains unchanged.
-
-New errors:
-
-```text
-InvalidSummaryCoverageBoundaryError
-SummaryGenerationError
-```
-
-Coverage regression continues to use:
-
-```text
-SummaryCoverageRegressionError
-```
-
-### Core invariants
-
-- checkpoint coverage advances monotonically;
-- newly summarized history begins exactly at `previousCoverage + 1`;
-- target and stored coverage must align to complete context-unit boundaries;
-- tool exchanges are never summarized only partially;
-- same-boundary requests are no-ops;
-- failed/cancelled summarization does not advance `SummaryStore`;
-- generated content must be non-empty;
-- summary token estimate is recorded at checkpoint creation;
-- summarizer receives cloned message projections rather than mutable durable-history references;
-- durable `AgentMessage[]` remains unchanged;
-- AgentLoop is still unchanged.
-
-### Verification performed
-
-Strict TypeScript subset compilation passed under:
-
-```text
-strict
-noUncheckedIndexedAccess
-exactOptionalPropertyTypes
-```
-
-Runtime smoke verified:
-
-```text
-first advance:
-  new history 0..1
-  → S1 covers 0..1
-
-second advance:
-  previous = S1
-  new history 2..3 only
-  → S2 covers 0..3
-
-abort after summarizer returns but before store.put:
-  → abort propagated
-  → latest store checkpoint remains S2
-```
-
-The full repository Vitest suite is not claimed as run in the current execution environment because repository dependencies could not be installed there.
+- only newly covered messages are summarized;
+- coverage boundaries must align with complete ContextUnits;
+- coverage cannot regress;
+- same-boundary advance is a no-op;
+- failure/cancellation before commit preserves the previous checkpoint.
 
 ---
 
-## v0.3.7 — AgentLoop integration + events + example ← next
+## v0.3.7 — ContextRuntime + AgentLoop integration ✅
 
 ### Goal
 
-Use the completed context subsystem only at the model-call boundary and expose its lifecycle through events/examples.
+Integrate context preparation at exactly one runtime boundary without teaching `AgentLoop` token estimation, checkpoint generation, or summary policy internals.
 
-Target integration:
+### Implemented
 
 ```text
-Agent state.messages
+src/context/runtime.ts
+src/context/index.ts
+
+src/core/agent-loop.ts
+src/core/agent.ts
+src/core/events.ts
+
+examples/07-context-compaction.ts
+tests/agent-context-integration.test.ts
+```
+
+Package/version finalization:
+
+```text
+package.json                  0.3.0
+src/version.ts                0.3.0
+README.md                     v0.3 architecture + demo
+```
+
+### ContextRuntime algorithm
+
+```text
+INPUT
+base system prompt
+complete durable history
+
+1. load latest SummaryStore checkpoint
+2. compute unsummarized durable tail = history[coverage + 1 .. end]
+3. render summary as model-only system context
+4. call ContextPlanner on durable tail
+5. if planner fits without omitting unsummarized units -> return
+6. otherwise find omitted-prefix boundary from planner provenance
+7. advance ProgressiveSummaryPolicy through that complete-unit boundary
+8. repeat planning with the newer checkpoint
+9. return stable PreparedContext
+```
+
+The loop is bounded by `maxSummaryPasses` and fails explicitly if compaction cannot converge.
+
+### Why summary is rendered into system context
+
+A summary checkpoint is derived context, not a real conversation message.
+
+Therefore v0.3 does **not** do this:
+
+```text
+state.messages.push(summary)
+SessionStore.append(summary)
+```
+
+Instead:
+
+```text
+base system prompt
++
+explicit checkpoint block
++
+recent AgentMessage[] tail
+        ↓
+LLMRequest
+```
+
+This keeps durable history honest while still making the checkpoint visible to the model.
+
+### Agent integration
+
+`AgentOptions` now supports:
+
+```ts
+context?: ContextRuntimeOptions;
+```
+
+The legacy:
+
+```ts
+contextTransform?: ContextTransform;
+```
+
+remains available for compatibility, but the two options are mutually exclusive.
+
+### AgentLoop integration
+
+The model-call boundary is now conceptually:
+
+```text
+state.messages
       │
-      ├──────────────► SessionStore / durable truth
+      ├──────────────► SessionStore
       │
-      └── ContextPlanner.prepare()
+      └── ContextRuntime.prepare()
                  ↓
           PreparedContext
                  ↓
             LLMProvider
 ```
 
-The integration also needs to decide how a stored summary checkpoint participates in `PreparedContext` while keeping it separate from durable history.
+Tool execution, session append behavior, steering/follow-up timing, and durable message mutation remain outside context policy.
 
-Planned files:
+### Context lifecycle events
+
+Added:
 
 ```text
-src/core/agent-loop.ts
-src/core/agent.ts
-src/core/events.ts
-src/context/... summary-aware planner composition
-examples/07-context-compaction.ts
-tests/agent-context-integration.test.ts
+context_prepare_start
+context_summary_advanced
+context_prepared
 ```
 
-Required proof:
+The event bus remains observational. It does not modify planner decisions.
+
+### Integration proof
+
+`tests/agent-context-integration.test.ts` proves the intended separation:
 
 ```text
+initial SessionStore history
+      +
+new user message
+      ↓
+ContextRuntime
+      ↓
+S1 then S2 checkpoints
+      ↓
+provider request
+  system = base + S2 checkpoint
+  messages = latest recent tail only
+
+while
+
+Agent.state.messages
+and SessionStore
+remain complete durable history
+```
+
+The integration test also preserves the old no-context configuration path and rejects simultaneous use of `context` and legacy `contextTransform`.
+
+### Educational example
+
+```bash
+npm run demo:context
+```
+
+runs `examples/07-context-compaction.ts` and prints:
+
+```text
+summary advancement
 provider-visible context
-<
-durable history
+durable message count
+latest summary checkpoint
 ```
-
-when compaction is needed, while SessionStore and `state.messages` remain complete.
 
 ---
 
@@ -368,11 +310,34 @@ when compaction is needed, while SessionStore and `state.messages` remain comple
 - [x] ContextSummarizer contract
 - [x] progressive compaction policy
 - [x] summarization cancellation semantics
-- [ ] AgentLoop integration
-- [ ] summary-aware prepared context
-- [ ] context lifecycle events
-- [ ] deterministic integration tests
-- [ ] educational example
-- [ ] package/version/docs finalization
+- [x] summary-aware ContextRuntime
+- [x] AgentLoop integration
+- [x] context lifecycle events
+- [x] deterministic integration test source
+- [x] educational example
+- [x] package/version/docs finalization
 
-Only after all applicable items pass should `v0.3` be frozen as a historical learning snapshot.
+---
+
+## Verification statement
+
+Incremental v0.3 source subsets were checked throughout implementation with:
+
+```text
+strict
+noUncheckedIndexedAccess
+exactOptionalPropertyTypes
+```
+
+The v0.3.7 integration seams also passed a consolidated strict TypeScript subset check and runtime smoke that produced:
+
+```text
+S1 -> S2
+final summary coverage 0..5
+model-visible tail = latest message only
+durable history unchanged
+```
+
+The full repository `npm run check` / Vitest suite is **not claimed as run** because the execution environment could not resolve GitHub/install repository dependencies.
+
+`v0.3` may now be treated as a frozen historical learning snapshot.
