@@ -1,17 +1,29 @@
 # Changelog
 
+## v0.5.2
+
+- Added `ExtensionDefinition`, `LoadedExtension`, normalized extension identity, and clone-safe host descriptors.
+- Added setup-scoped `ExtensionAPI` with `on(hook, handler)` only; the capability closes immediately after setup resolves or rejects.
+- Added `ExtensionHost` with serialized `load()` / `unload()` operations so async setup completion timing cannot reorder Extensions or hooks.
+- Added per-Extension owned registration tracking with reverse-order disposal for setup rollback and unload.
+- Added atomic setup semantics: any setup failure removes all registrations created by that setup and does not commit a loaded Extension record.
+- Added typed `DuplicateExtensionError`, `UnknownExtensionError`, `InvalidExtensionDefinitionError`, `ExtensionApiClosedError`, and `ExtensionSetupError` with original cause provenance.
+- Kept Host implementation details (`ScopedExtensionAPI` and the registration set) out of the package public API.
+- Added `tests/extension-host.test.ts` covering deterministic setup order, concurrent load serialization, normalized duplicate rejection, atomic rollback, exact unload cleanup, setup API closure, clone semantics, invalid definitions, and unknown unload.
+- Strict TypeScript source-subset checking passed under `strict`, `noUncheckedIndexedAccess`, and `exactOptionalPropertyTypes`.
+- Runtime Host smoke verified failed-setup rollback, closed retained setup API, and exact owned-hook cleanup after unload.
+- Full repository Vitest is not claimed as run in the current execution environment.
+
 ## v0.5.1
 
-- Added the first Extensions runtime primitives: typed lifecycle hook contracts, `HookPipeline`, extension-owner metadata, disposables, and typed hook errors.
-- Defined the initial hook surface: `before_run`, `before_model`, `after_model`, `before_tool`, `after_tool`, `after_turn`, and `after_run`.
-- Added deterministic sequential registration-order execution with no numeric priority system.
-- Made handler event inputs mutation-isolated through cloning; runtime behavior changes only through explicit structured return values.
-- Added `before_tool` continue / replace-arguments / block semantics. Replacements chain into later handlers; block short-circuits later handlers and records blocking extension provenance.
-- Added constrained `after_tool` result-transform chaining and context-contribution aggregation for `before_run` / `before_model`.
-- Added `ExtensionHookError` with extension name, hook name, and original cause, plus `InvalidHookRegistrationError` for invalid owners.
-- Propagated original AbortSignal reasons before/after awaited handlers so cancellation is not misreported as an extension failure.
-- Added `tests/extension-hooks.test.ts` covering ordering, transform chaining, block short-circuiting, mutation isolation, after-tool chaining, context contribution order, disposal, cancellation, provenance, and invalid registration.
-- Strict TypeScript source-subset checking and HookPipeline runtime smoke passed; the full repository Vitest suite is not claimed as run in the current execution environment.
+- Added typed Extension hook contracts for `before_run`, `before_model`, `after_model`, `before_tool`, `after_tool`, `after_turn`, and `after_run`.
+- Added deterministic sequential `HookPipeline` with registration-order execution and no numeric priority system.
+- Added explicit `before_tool` continue/replace/block composition while preserving ToolCall identity and chaining transformed arguments into later handlers.
+- Added constrained `after_tool` result transformation and ordered context contributions for `before_run` / `before_model`.
+- Isolated handler event mutation by cloning inputs; only explicit return values change pipeline behavior.
+- Added idempotent `Disposable` hook registrations.
+- Added `ExtensionHookError` with extension/hook/cause provenance and original AbortSignal-reason propagation.
+- Added focused hook tests plus strict TypeScript checking and runtime pipeline smoke.
 
 ## v0.4.7 / 0.4.0
 
@@ -25,42 +37,26 @@
 - Added `examples/09-progressive-skills.ts` and `npm run demo:skills`.
 - Finalized `package.json` and `MINI_PI_VERSION` as `0.4.0`.
 - Rewrote README and v0.4 architecture/version/implementation docs to describe the implemented frozen snapshot rather than target design.
-- Strict TypeScript integration-subset checking and progressive-Skills runtime smoke passed; the full repository Vitest suite is not claimed as run in the current execution environment.
 
 ## v0.4.6
 
-- Added metadata-only Skill lifecycle events: `skill_activation_start`, `skill_activated`, `skill_activation_reused`, and `skill_activation_failed`.
-- Added explicit activation origins: `api`, `manual`, and `tool`.
-- Added `SkillEventBus` with listener-failure isolation so telemetry cannot change activation success/failure semantics.
-- Extended `SkillActivationService` with optional lifecycle event emission while preserving normalized idempotency and original activation errors.
-- Updated `LoadSkillTool` to mark activation origin as `tool`.
-- Added `ManualSkillActivator`, a thin facade that reuses the exact same `SkillActivationService` and ActiveSkillStore as model-driven activation.
-- Kept event payloads metadata-only; full Skill instructions are never emitted.
-- Added tests proving manual and tool activation converge on one store, reused activation does not reload, failure events preserve compact error metadata, and failing listeners do not break activation.
-- Added a real resource-boundary test proving activation reads only `SKILL.md`: reference contents are not exposed and scripts are not auto-executed.
-- Added `examples/08-skill-manual-activation.ts`.
+- Added metadata-only Skill lifecycle events and manual activation over the shared activation service.
 
 ## v0.4.5
 
-- Added run-scoped `ActiveSkillStore` and reference `InMemoryActiveSkillStore` with normalized-name identity, deterministic listing, clone-on-read/write semantics, and explicit `clear()`.
-- Added shared `SkillActivationService` for model-driven and manual activation paths.
-- Added ordinary `LoadSkillTool` with strict `{ name: string }` schema and compact acknowledgements that never contain full instructions.
+- Added run-scoped ActiveSkillStore, shared activation service, and compact `load_skill` acknowledgements.
 
 ## v0.4.4
 
-- Added generic `ContextSupplement` model-only context material with deterministic validation/rendering.
-- Added compact Skill catalog and active Skill supplement producers.
-- Updated `ContextRuntime` to render supplements before ContextPlanner budgeting.
-- Kept supplements and summary checkpoints out of durable AgentMessage history.
+- Added generic ContextSupplement model-only context material, Skill catalog/body supplements, and budget integration.
 
 ## v0.4.3
 
-- Added `LoadedSkill`, `SkillLoader`, `FilesystemSkillLoader`, lexical/canonical path validation, symlink rejection, and identity-drift detection.
-- Kept Level-1 loading narrow to the selected `SKILL.md` only.
+- Added safe on-demand Skill loading and path/root validation.
 
 ## v0.4.2
 
-- Added descriptor-only project discovery and deterministic `SkillRegistry` semantics.
+- Added descriptor-only project discovery and deterministic SkillRegistry semantics.
 
 ## v0.4.1
 
@@ -68,19 +64,19 @@
 
 ## v0.3.7
 
-- Added `ContextRuntime`, summary-aware AgentLoop integration, context lifecycle events, and finalized package/runtime version `0.3.0`.
+- Added ContextRuntime, summary-aware AgentLoop integration, and context lifecycle events.
 
 ## v0.3.6
 
-- Added `ContextSummarizer`, deterministic offline summarization, and `ProgressiveSummaryPolicy`.
+- Added ContextSummarizer and ProgressiveSummaryPolicy.
 
 ## v0.3.5
 
-- Added explicit `ContextSummary` checkpoint artifacts and `SummaryStore`.
+- Added ContextSummary checkpoints and SummaryStore.
 
 ## v0.3.4
 
-- Added `ContextPlanner`, `PreparedContext`, provenance, and budgeted KeepRecent selection.
+- Added ContextPlanner, PreparedContext, provenance, and KeepRecent selection.
 
 ## v0.3.3
 
@@ -97,8 +93,3 @@
 ## v0.1.0
 
 - Initial educational Pi-style Agent Runtime baseline.
-- Provider-neutral message and tool contracts.
-- Core Agent Loop with tool-result feedback.
-- Event bus, cancellation, steering and follow-up queues.
-- JSONL sessions and context-transform seam.
-- Rooted file tools and opt-in shell tool.
