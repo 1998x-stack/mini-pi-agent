@@ -17,46 +17,31 @@ Second invariant:
 
 > **Event observes. Hook participates.**
 
----
-
 ## Current architecture
 
 ```text
-Extension-owned handler
-        │
-        ▼
-   HookPipeline
-        │
-        ├── deterministic registration order
-        ├── cloned HookEvent inputs
-        ├── explicit structured results
-        ├── cancellation propagation
-        └── ExtensionHookError provenance
+ExtensionDefinition
+      ↓
+ExtensionHost
+      ↓
+scoped ExtensionAPI during setup only
+      ↓
+owned registrations
+      ↓
+HookPipeline
 ```
 
-The first implemented runtime primitive is now the hook pipeline itself. It is not connected to Agent/AgentLoop yet.
-
-Target v0.5 architecture remains:
+The Host now guarantees:
 
 ```text
-ExtensionDefinition[]
-        │
-        ▼
-   ExtensionHost
-        │
-        ├── owned Tool registrations ─────► ToolRegistry
-        │
-        ├── owned Hook registrations ─────► HookPipeline
-        │
-        └── context contributions ─────────► ContextSupplement[]
-                                             │
-                                             ▼
-                                       ContextRuntime
+normalized unique Extension identity
+deterministic serialized setup order
+setup-scoped registration capability
+atomic rollback on failed setup
+exact owned-registration cleanup on unload
 ```
 
-`AgentLoop` may eventually know generic hook names/results, but must never branch on concrete Extension names.
-
----
+`Agent` and `AgentLoop` are not integrated with Extensions yet.
 
 ## Hook surface
 
@@ -70,75 +55,68 @@ after_turn
 after_run
 ```
 
-Current result powers:
+`before_tool` is the strongest initial gate/transform seam:
 
 ```text
-before_run / before_model
-→ ContextSupplement contributions
-
-after_model / after_turn / after_run
-→ observe only
-
-before_tool
-→ continue
-→ replace arguments
-→ block
-
-after_tool
-→ constrained ToolResult replacement
+ToolCall
+  ↓
+continue / replace arguments / block
 ```
 
-Direct HookEvent mutation is ignored because every handler receives a clone. Behavioral changes must be returned explicitly.
+Only explicit handler return values have runtime meaning. Handler mutation of cloned event input does not.
 
----
+## Extension setup lifecycle
+
+```text
+ExtensionHost.load(definition)
+      ↓
+validate name/version/setup
+      ↓
+create owned registration set
+      ↓
+open scoped ExtensionAPI
+      ↓
+await setup(api)
+      ↓
+SUCCESS                 FAILURE
+  │                         │
+close API               close API
+  │                         │
+commit loaded record     rollback registrations
+                            │
+                       ExtensionSetupError
+```
+
+The scoped API cannot be retained and used to register handlers after setup completes.
 
 ## Ordering
 
-Reference v0.5 ordering is intentionally simple:
+Reference v0.5 order remains intentionally simple:
 
 ```text
-registration order
+Extension load invocation order
+then
+handler registration order within each setup
 ```
 
-Once ExtensionHost exists this naturally means:
+Host operations are serialized so async setup completion timing cannot change handler ordering.
+
+No numeric hook priorities exist in v0.5.
+
+## Completed increments
 
 ```text
-extension load order
-then handler registration order within each extension
+v0.5.1  hook contracts + deterministic HookPipeline          ✅
+v0.5.2  ExtensionDefinition + ExtensionHost + ownership      ✅
 ```
 
-No numeric hook priority system exists in v0.5.
-
----
-
-## Error / cancellation semantics
+## Next increment
 
 ```text
-handler throws
-→ ExtensionHookError(extensionName, hook, cause)
-
-AbortSignal aborts
-→ original abort reason propagates
-→ later handlers do not run
+v0.5.3  Extension-owned Tool registration + unload cleanup   ← next
 ```
 
-A `before_tool` block short-circuits later handlers and records the blocking owner.
-
----
-
-## Implementation stages
-
-```text
-v0.5.1  hook contracts + deterministic HookPipeline           ✅
-v0.5.2  ExtensionDefinition + ExtensionHost + ownership       ← next
-v0.5.3  extension-owned Tool registration + unload cleanup
-v0.5.4  before_tool gate/transform integration
-v0.5.5  model/run hooks + budgeted context contributions
-v0.5.6  failure/cancellation/events/cleanup semantics
-v0.5.7  Agent integration + examples + 0.5.0 freeze
-```
-
----
+The next step adds `registerTool()` to the same setup-scoped `ExtensionAPI` and makes Tool registrations participate in the same ownership/rollback/unload model.
 
 ## Explicit non-goals
 
@@ -152,26 +130,8 @@ Keep out of v0.5:
 - hot reload/file watching;
 - numeric hook priorities;
 - background task manager;
-- direct mutable AgentState access;
+- direct mutable `AgentState` access;
 - provider-specific hook APIs.
-
----
-
-## Verification status
-
-v0.5.1 source subset passed strict TypeScript checking with:
-
-```text
-strict
-noUncheckedIndexedAccess
-exactOptionalPropertyTypes
-```
-
-Runtime smoke verified transform chaining, block short-circuit/provenance, source-event immutability, original abort-reason propagation, and ExtensionHookError cause provenance.
-
-The full repository Vitest suite is not claimed as run in the current execution environment.
-
----
 
 ## Branch rule
 
