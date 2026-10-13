@@ -17,12 +17,18 @@ export interface ContextSupplement {
 
 const SUPPLEMENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 const VALID_KINDS = new Set<ContextSupplementKind>(["skill-catalog", "active-skill"]);
+const KIND_ORDER: Record<ContextSupplementKind, number> = {
+  "skill-catalog": 0,
+  "active-skill": 1
+};
 
 function cloneSupplement(supplement: ContextSupplement): ContextSupplement {
   return { ...supplement };
 }
 
 function compareSupplement(left: ContextSupplement, right: ContextSupplement): number {
+  const kindOrder = KIND_ORDER[left.kind] - KIND_ORDER[right.kind];
+  if (kindOrder !== 0) return kindOrder;
   if (left.id < right.id) return -1;
   if (left.id > right.id) return 1;
   return 0;
@@ -68,6 +74,7 @@ export function normalizeContextSupplements(
 
 /**
  * Render supplements into the system material *before* ContextPlanner budgeting.
+ * Catalog material is rendered before active-skill bodies; peers are ordered by id.
  * No supplement is silently dropped by the v0.4.4 reference runtime.
  */
 export function renderContextSupplements(
