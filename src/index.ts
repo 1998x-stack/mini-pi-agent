@@ -22,4 +22,5 @@ export { OpenAICompatibleLLM, type OpenAICompatibleOptions } from "./llm/openai-
 export type { LLMProvider, LLMRequest, LLMStreamEvent, ScriptedAssistantStep } from "./llm/types.js";
 export { JsonlSessionStore } from "./session/jsonl-session.js";
 export type { SessionStore } from "./session/types.js";
+export * from "./skills/index.js";
 export * from "./tools/index.js";
