@@ -1,5 +1,6 @@
 import type { AgentMessage, AssistantMessage, ToolCall, ToolResultMessage } from "./types.js";
-import type { SkillActivationOrigin } from "../skills/events.js";
+
+export type AgentSkillActivationOrigin = "api" | "manual" | "tool";
 
 export type AgentEvent =
   | { type: "agent_start"; runId: string; input: string }
@@ -39,7 +40,7 @@ export type AgentEvent =
       type: "skill_activation_start";
       runId: string;
       turn: number;
-      origin: SkillActivationOrigin;
+      origin: AgentSkillActivationOrigin;
       requestedName: string;
       normalizedName: string;
     }
@@ -47,7 +48,7 @@ export type AgentEvent =
       type: "skill_activated";
       runId: string;
       turn: number;
-      origin: SkillActivationOrigin;
+      origin: AgentSkillActivationOrigin;
       name: string;
       normalizedName: string;
       manifestPath?: string;
@@ -56,7 +57,7 @@ export type AgentEvent =
       type: "skill_activation_reused";
       runId: string;
       turn: number;
-      origin: SkillActivationOrigin;
+      origin: AgentSkillActivationOrigin;
       name: string;
       normalizedName: string;
       manifestPath?: string;
@@ -65,7 +66,7 @@ export type AgentEvent =
       type: "skill_activation_failed";
       runId: string;
       turn: number;
-      origin: SkillActivationOrigin;
+      origin: AgentSkillActivationOrigin;
       requestedName: string;
       normalizedName: string;
       manifestPath?: string;
