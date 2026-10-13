@@ -1,3 +1,4 @@
+import { ToolRegistry } from "../core/tool-registry.js";
 import {
   DuplicateExtensionError,
   ExtensionSetupError,
@@ -20,6 +21,11 @@ interface LoadedExtensionRecord {
 
 export interface ExtensionHostOptions {
   pipeline: HookPipeline;
+  /**
+   * Tool registry shared with the runtime. A private registry is created when
+   * omitted so hook-only v0.5.2 callers remain valid.
+   */
+  tools?: ToolRegistry;
 }
 
 export function normalizeExtensionName(name: string): string {
@@ -54,19 +60,21 @@ function validateDefinition(extension: ExtensionDefinition): {
 }
 
 /**
- * Deterministic owner for Extension setup and owned hook registrations.
+ * Deterministic owner for Extension setup and owned registrations.
  *
  * Host operations are serialized so async setup completion order cannot change
- * extension load order or HookPipeline registration order.
+ * extension load order, hook registration order, or tool ownership semantics.
  */
 export class ExtensionHost {
   private readonly pipeline: HookPipeline;
+  private readonly tools: ToolRegistry;
   private readonly records: LoadedExtensionRecord[] = [];
   private operationTail: Promise<void> = Promise.resolve();
   private nextLoadIndex = 0;
 
   constructor(options: ExtensionHostOptions) {
     this.pipeline = options.pipeline;
+    this.tools = options.tools ?? new ToolRegistry();
   }
 
   load(extension: ExtensionDefinition): Promise<LoadedExtension> {
@@ -98,7 +106,12 @@ export class ExtensionHost {
     }
 
     const registrations = new ExtensionRegistrationSet();
-    const api = new ScopedExtensionAPI(identity.name, this.pipeline, registrations);
+    const api = new ScopedExtensionAPI(
+      identity.name,
+      this.pipeline,
+      this.tools,
+      registrations
+    );
 
     try {
       await extension.setup(api);
