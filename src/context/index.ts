@@ -9,6 +9,7 @@ export {
   ContextError,
   InvalidContextBudgetError,
   InvalidContextHistoryError,
+  InvalidContextSupplementError,
   InvalidContextSummaryError,
   InvalidSummaryCoverageBoundaryError,
   InvalidToolResultReductionOptionsError,
@@ -60,6 +61,12 @@ export {
   type ContextSummarizerResult,
   type DeterministicContextSummarizerOptions
 } from "./summarizer.js";
+export {
+  normalizeContextSupplements,
+  renderContextSupplements,
+  type ContextSupplement,
+  type ContextSupplementKind
+} from "./supplements.js";
 export {
   HeadTailToolResultReducer,
   resolveToolResultReductionOptions,
