@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.4.2
+
+- Added `SkillDescriptor`, `SkillDiscoveryContext`, and `SkillSource` discovery contracts.
+- Added project-local `ProjectSkillSource` for `<cwd>/.mini-pi/skills/*/SKILL.md`.
+- Discovery is one package-directory level deep, returns descriptor metadata only, ignores unrelated/nested resources, and treats a missing Skill root as an empty catalog.
+- Added cancellation checks around project discovery and propagated invalid top-level manifests through the existing typed parser error.
+- Added deterministic `SkillRegistry` with `trim + lowercase` name normalization, case-insensitive lookup, and stable normalized-name ordering.
+- Added `DuplicateSkillError` with both conflicting manifest paths instead of silently choosing a winner.
+- Registry construction, `list()`, and `get()` clone descriptors and metadata so external mutation cannot change internal catalog state.
+- Added discovery tests for missing roots, deterministic one-level discovery, ignored nested resources, malformed manifests, and cancellation.
+- Added registry tests for ordering, normalized lookup, duplicate rejection, clone semantics, and empty catalogs.
+- Strict TypeScript source-subset checking and discovery/registry runtime smoke passed; the full repository Vitest suite is not claimed as run in the current execution environment.
+
 ## v0.4.1
 
 - Added the first Skills data contracts: `SkillManifest` and `ParsedSkillDocument`.
