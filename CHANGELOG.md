@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.4.3
+
+- Added `LoadedSkill` and `SkillLoader` contracts plus the reference `FilesystemSkillLoader`.
+- Added pure descriptor path validation requiring absolute paths, lexical containment, and exact `<root>/SKILL.md` identity.
+- Added canonical filesystem validation using `lstat` and `realpath` before reading the selected Skill body.
+- Explicitly rejected symlink package roots and symlink manifests with `SkillPathError`.
+- Added normalized descriptor/manifest identity validation with `SkillIdentityMismatchError` to catch stale or changed Skills between discovery and load.
+- Kept Level-1 loading narrow: only the selected `SKILL.md` is read; `references/`, `scripts/`, and `assets/` are not traversed or executed.
+- Cloned the returned descriptor/metadata so loading cannot expose shared mutable descriptor state.
+- Added cancellation checks around filesystem phases and preserved the original abort reason.
+- Added path and loader tests for lexical escape, nested-manifest rejection, normal loading, identity drift, symlink root/manifest, descriptor immutability, and cancellation.
+- Strict TypeScript source-subset compilation and filesystem runtime smoke passed; the full repository Vitest suite is not claimed as run in the current execution environment.
+
 ## v0.4.2
 
 - Added `SkillDescriptor`, `SkillDiscoveryContext`, and `SkillSource` discovery contracts.
@@ -68,38 +81,26 @@
 - Added `ContextPlanner`, `ContextPlannerInput`, `PreparedContext`, and structured `ContextProvenance`.
 - Added `KeepRecentContextPlanner` as the first budgeted model-context construction policy.
 - Composed context units, tool-result reduction, token estimation, and resolved budgets into one deterministic pipeline.
-- Selected a chronological contiguous suffix of the newest complete context units; the planner never skips a middle unit merely to pack more history.
+- Selected a chronological contiguous suffix of the newest complete units under budget.
 - Rejected incomplete trailing tool exchanges before provider-context preparation.
 - Failed explicitly when the system prompt or newest atomic unit cannot fit the resolved input budget.
 - Added reduction provenance for model-visible ToolResult projections while preserving durable history unchanged.
 - Added cancellation checks around context preparation.
-- Added tests for full-fit history, suffix selection, tool-exchange atomicity, reducer integration, overflow, incomplete exchange, and cancellation.
 
 ## v0.3.3
 
 - Added `ToolResultReducer` and deterministic `HeadTailToolResultReducer`.
-- Added explicit model-context reduction metadata: original, kept-head, kept-tail, visible, and omitted character counts.
-- Added validated reduction options with `InvalidToolResultReductionOptionsError`.
-- Preserved `toolCallId`, `toolName`, `isError`, and timestamp identity in model-visible copies.
-- Counted and sliced content by Unicode code point to avoid breaking surrogate pairs.
-- Kept durable `ToolResultMessage` content immutable; reduction only produces a model-visible projection.
-- Added tests for small results, large results, error results, Unicode safety, determinism, and invalid options.
+- Added explicit model-context reduction metadata and Unicode-safe head/tail reduction.
+- Preserved durable ToolResult identity/content while producing model-visible copies.
 
 ## v0.3.2
 
-- Added `ContextUnit` modeling for user, assistant, and tool-exchange history.
-- Added `buildContextUnits()` and `flattenContextUnits()`.
-- Grouped assistant tool calls with their matching tool results as one causal context unit.
-- Added explicit support for trailing in-progress tool exchanges with `complete=false` and `missingToolCallIds`.
-- Added `InvalidContextHistoryError` for orphan, duplicate, mismatched, or interleaved tool history.
-- Added tests for causal atomicity and invalid-history failure cases.
+- Added `ContextUnit` modeling and `ToolExchangeContextUnit` atomicity.
+- Added explicit support for trailing in-progress exchanges and invalid-history errors.
 
 ## v0.3.1
 
-- Added explicit `ContextBudget` and resolved input-budget calculation.
-- Added deterministic `ApproximateTokenEstimator` and prepared-input estimation.
-- Added context budget validation and dedicated budget overflow errors.
-- Added unit tests for budget and token-estimation invariants.
+- Added explicit `ContextBudget`, deterministic token estimation, and budget overflow errors.
 
 ## v0.1.0
 
