@@ -8,138 +8,128 @@ Secondary invariant:
 
 > Full Skill bodies are loaded and exposed progressively rather than globally injected.
 
-Do not skip ahead to activation before discovery/loading contracts are stable.
-
 ---
 
 ## v0.4.1 — Skill manifest parser + core types ✅ implemented
 
-Implemented:
-
-```text
-src/skills/types.ts
-src/skills/errors.ts
-src/skills/manifest-parser.ts
-src/skills/index.ts
-src/index.ts
-
-tests/skill-manifest.test.ts
-```
-
-Core contracts:
-
-```ts
-interface SkillManifest {
-  name: string;
-  description: string;
-  metadata?: Record<string, string>;
-}
-
-interface ParsedSkillDocument {
-  manifest: SkillManifest;
-  instructions: string;
-}
-```
-
-The parser is deterministic, dependency-free, side-effect free, and deliberately supports only a simple scalar frontmatter subset.
+Implemented the minimal `SkillManifest`, `ParsedSkillDocument`, typed manifest errors, and pure `parseSkillDocument()`.
 
 ---
 
 ## v0.4.2 — ProjectSkillSource + SkillRegistry ✅ implemented
 
-### Goal
-
-Discover cheap Skill descriptors from project-local roots and own them in a deterministic catalog without activating or context-injecting any Skill body.
-
-### Implemented
-
-```text
-src/skills/source.ts
-src/skills/project-source.ts
-src/skills/registry.ts
-src/skills/types.ts
-src/skills/errors.ts
-src/skills/index.ts
-
-tests/skill-discovery.test.ts
-tests/skill-registry.test.ts
-```
-
-### Contracts
-
-```ts
-interface SkillDescriptor {
-  name: string;
-  description: string;
-  root: string;
-  manifestPath: string;
-  metadata?: Record<string, string>;
-}
-
-interface SkillDiscoveryContext {
-  cwd: string;
-  signal: AbortSignal;
-}
-
-interface SkillSource {
-  discover(context: SkillDiscoveryContext): Promise<SkillDescriptor[]>;
-}
-```
-
-Reference source:
-
-```ts
-class ProjectSkillSource implements SkillSource
-```
-
-Reference root:
+Implemented descriptor-only project discovery from:
 
 ```text
 <cwd>/.mini-pi/skills/*/SKILL.md
 ```
 
-Reference registry:
+and deterministic `SkillRegistry` identity/order semantics.
+
+---
+
+## v0.4.3 — SkillLoader + root/path validation ✅ implemented
+
+### Goal
+
+Load exactly one selected Skill body while preserving package-root safety and descriptor identity.
+
+### Implemented
+
+```text
+src/skills/loader.ts
+src/skills/paths.ts
+src/skills/types.ts
+src/skills/errors.ts
+src/skills/index.ts
+
+tests/skill-loader.test.ts
+tests/skill-paths.test.ts
+```
+
+### Contracts
 
 ```ts
-class SkillRegistry {
-  list(): readonly SkillDescriptor[];
-  get(name: string): SkillDescriptor | undefined;
+interface LoadedSkill {
+  descriptor: SkillDescriptor;
+  instructions: string;
 }
+
+interface SkillLoader {
+  load(descriptor: SkillDescriptor, signal: AbortSignal): Promise<LoadedSkill>;
+}
+
+class FilesystemSkillLoader implements SkillLoader
 ```
 
-Name identity:
+### Pure lexical path checks
+
+`validateSkillDescriptorPaths()` requires:
 
 ```text
-normalizeSkillName(name)
-=
-trim + lowercase
+root is absolute
+manifestPath is absolute
+manifestPath is inside root
+manifestPath is exactly root/SKILL.md
 ```
 
-Duplicate normalized names fail through:
+`isPathWithinRoot()` distinguishes true `..` parent traversal from legal names that merely begin with `..`.
+
+### Filesystem/canonical checks
+
+`FilesystemSkillLoader` additionally requires:
 
 ```text
-DuplicateSkillError
+lstat(root)      → real directory, not symlink
+lstat(SKILL.md)  → real regular file, not symlink
+realpath(manifest) remains within realpath(root)
+canonical manifest == canonical root/SKILL.md
 ```
 
-with both manifest paths preserved for diagnosis.
+This keeps symlink/path behavior explicit instead of trusting path strings alone.
 
-### Discovery semantics
+### Identity rule
 
-- missing Skill root returns an empty descriptor list;
-- only one child-directory level is considered;
-- only directory packages with a regular `SKILL.md` are discovered;
-- nested resources are not traversed;
-- invalid top-level manifests propagate their parser error;
-- cancellation is checked before, during, and after discovery;
-- descriptors expose metadata/package identity only, never `instructions`.
+After loading and parsing, normalized manifest identity must equal the selected descriptor identity:
 
-### Registry semantics
+```text
+normalizeSkillName(parsed.manifest.name)
+==
+normalizeSkillName(descriptor.name)
+```
 
-- ordering is deterministic by normalized name;
-- lookups use normalized names;
-- duplicate normalized names fail instead of choosing a winner;
-- input descriptors are cloned during construction;
-- `list()` and `get()` return clones so external mutation cannot change the internal catalog.
+Failure throws:
+
+```text
+SkillIdentityMismatchError
+```
+
+Path/file-type violations throw:
+
+```text
+SkillPathError
+```
+
+### Progressive-disclosure boundary
+
+The loader reads only the requested `SKILL.md`.
+
+It does not traverse or execute:
+
+```text
+references/
+scripts/
+assets/
+```
+
+A broken resource below `references/` therefore cannot break normal Skill body loading unless the model later explicitly asks an ordinary file tool to read it.
+
+### Immutability/cancellation
+
+- input descriptor remains unchanged;
+- returned descriptor is cloned, including metadata;
+- `AbortSignal` is checked before and between filesystem phases;
+- pre-aborted signals preserve the original abort reason.
 
 ### Verification performed
 
@@ -151,84 +141,17 @@ noUncheckedIndexedAccess
 exactOptionalPropertyTypes
 ```
 
-Runtime smoke verified:
-
-```text
-2 project packages
-→ 2 SkillDescriptor objects
-→ no instructions field
-
-SkillRegistry
-→ deterministic order
-→ case-insensitive/trimmed lookup
-→ duplicate normalized name rejected
-
-pre-aborted discovery
-→ original abort reason propagated
-```
+Runtime filesystem smoke verified normal load, broken-reference non-traversal, descriptor cloning, identity-drift rejection, symlink-root rejection, symlink-manifest rejection, and cancellation propagation.
 
 The full repository Vitest suite is not claimed as run in the current execution environment.
 
 ---
 
-## v0.4.3 — SkillLoader + root/path validation ← next
+## v0.4.4 — Catalog renderer + context supplement seam ← next
 
 ### Goal
 
-Load exactly one selected `SKILL.md` body while preserving package-root safety and descriptor identity.
-
-### Add
-
-```text
-src/skills/loader.ts
-src/skills/paths.ts
-src/skills/types.ts
-src/skills/errors.ts
-
-tests/skill-loader.test.ts
-tests/skill-paths.test.ts
-```
-
-### Target contracts
-
-```ts
-interface LoadedSkill {
-  descriptor: SkillDescriptor;
-  instructions: string;
-}
-
-interface SkillLoader {
-  load(descriptor: SkillDescriptor, signal: AbortSignal): Promise<LoadedSkill>;
-}
-```
-
-Reference implementation:
-
-```ts
-class FilesystemSkillLoader implements SkillLoader
-```
-
-### Must prove
-
-- descriptor root and manifest path are absolute/canonical enough for deterministic checks;
-- manifest path remains under Skill root;
-- root escape such as `../other/SKILL.md` is rejected with `SkillPathError`;
-- symlink/path behavior is explicit rather than silently trusted;
-- parsed manifest normalized name matches descriptor normalized identity;
-- identity mismatch fails with a typed error;
-- full instructions are returned only for the requested descriptor;
-- references/scripts/assets remain unloaded;
-- source descriptor is not mutated;
-- returned descriptor is a safe copy;
-- cancellation propagates.
-
----
-
-## v0.4.4 — Catalog renderer + context supplement seam
-
-### Goal
-
-Expose compact Skill availability and activated Skill bodies through the same v0.3 context-budget path.
+Expose compact Skill availability and selected Skill bodies through the same budget-accounted v0.3 context path.
 
 ### Add/update
 
@@ -254,141 +177,53 @@ interface ContextSupplement {
 }
 ```
 
-### Must prove
+### Required semantics
 
-- descriptor catalog is deterministic and compact;
-- no full instructions appear in catalog;
-- catalog/active bodies are accounted before final budget validation;
-- already-active Skill instructions are never silently omitted;
-- supplements do not become durable AgentMessages;
-- existing summary checkpoint semantics remain intact.
+- Skill catalog is deterministic and compact;
+- catalog contains descriptors only, never full Skill instructions;
+- supplements are model-only derived context, never durable `AgentMessage`s;
+- supplement text is included in token accounting before final provider context is accepted;
+- active Skill instructions are required context while active and cannot be silently dropped;
+- summary checkpoint behavior from v0.3 remains valid;
+- impossible supplement + history budgets fail explicitly rather than bypass planning.
+
+### Forbidden shortcut
+
+```text
+planner.prepare(...)
+      ↓
+PreparedContext
+      ↓
+append Skill text afterwards   ❌
+```
+
+Required:
+
+```text
+Skill supplements
+      ↓
+budget-aware context construction
+      ↓
+PreparedContext
+```
 
 ---
 
 ## v0.4.5 — Run-scoped activation + load_skill adapter
 
-### Goal
-
-Allow model-driven on-demand Skill activation while reusing the existing tool-call feedback loop.
-
-### Add
-
-```text
-src/skills/active-store.ts
-src/skills/activation-service.ts
-src/skills/load-skill-tool.ts
-
-tests/skill-activation.test.ts
-tests/load-skill-tool.test.ts
-```
-
-### Target flow
-
-```text
-catalog
-  ↓
-LLM calls load_skill(name)
-  ↓
-activation service
-  ↓
-registry lookup
-  ↓
-loader
-  ↓
-ActiveSkillStore
-  ↓
-next context preparation includes instructions
-```
-
-### Must prove
-
-- activation is idempotent by Skill name;
-- unknown names fail explicitly;
-- full body is not duplicated as an oversized ToolResult;
-- active instructions appear on the next model request;
-- active bodies clear between Agent runs;
-- durable history records only real tool call/result messages.
+Add `ActiveSkillStore`, shared activation service, and a small `load_skill(name)` Tool adapter. Activation must be idempotent and the tool result must acknowledge activation without duplicating the full body.
 
 ---
 
 ## v0.4.6 — References + events + manual activation surface
 
-### Goal
-
-Complete the Skill lifecycle while keeping references/scripts on normal tool paths.
-
-### Add/update
-
-```text
-src/core/events.ts
-src/core/agent.ts
-examples/08-skill-manual-activation.ts
-
-tests/skill-events.test.ts
-```
-
-### Semantics
-
-- references are mentioned by Skill instructions and read through ordinary `read` tool;
-- scripts execute only through ordinary shell/tool path;
-- events expose metadata, not full instructions;
-- explicit activation and model activation share one activation service.
-
-Potential CLI syntax:
-
-```text
-/skill:code-review
-```
-
-CLI support is optional if it would distort the runtime API.
+References remain ordinary file-tool reads; scripts remain ordinary shell/tool executions. Add metadata-only Skill lifecycle events and a shared explicit activation surface.
 
 ---
 
 ## v0.4.7 — Agent integration + examples + freeze
 
-### Goal
-
-Create a complete end-to-end Skills learning snapshot and freeze package `0.4.0`.
-
-### Add/update
-
-```text
-src/core/agent.ts
-src/core/agent-loop.ts only if a generic orchestration seam is required
-src/index.ts
-README.md
-CHANGELOG.md
-version.md
-examples/09-progressive-skills.ts
-tests/agent-skills-integration.test.ts
-```
-
-### End-to-end proof
-
-```text
-Agent starts
-  ↓
-discovers 20 Skills
-  ↓
-provider initially sees 20 compact descriptors only
-  ↓
-model activates code-review
-  ↓
-next provider request sees full code-review instructions
-  ↓
-other 19 Skill bodies remain unloaded/unexposed
-  ↓
-run ends
-  ↓
-next run has catalog but no active code-review body
-```
-
-### Freeze requirements
-
-- package/version becomes `0.4.0`;
-- docs describe implemented architecture rather than targets;
-- all v0.4 Definition of Done items checked;
-- branch status changes to implemented historical learning snapshot.
+Prove end-to-end progressive disclosure, update package/runtime version to `0.4.0`, finalize docs/examples, and freeze the branch.
 
 ---
 
@@ -397,7 +232,7 @@ next run has catalog but no active code-review body
 - [x] manifest parser and typed errors
 - [x] descriptor/discovery contracts
 - [x] deterministic SkillRegistry
-- [ ] safe on-demand SkillLoader
+- [x] safe on-demand SkillLoader
 - [ ] compact catalog renderer
 - [ ] context supplement budget integration
 - [ ] run-scoped ActiveSkillStore
