@@ -1,6 +1,6 @@
 {
   "name": "mini-pi-agent",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "A small, extensible Pi-style agent runtime for learning agent architecture from first principles.",
   "type": "module",
   "main": "dist/index.js",
@@ -18,6 +18,7 @@
     "build": "tsc -p tsconfig.build.json",
     "dev": "tsx src/cli.ts",
     "demo": "tsx examples/01-scripted-agent.ts",
+    "demo:context": "tsx examples/07-context-compaction.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.json",
