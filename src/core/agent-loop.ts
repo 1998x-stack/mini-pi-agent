@@ -1,4 +1,5 @@
 import type { ContextRuntime } from "../context/runtime.js";
+import type { ContextSupplement } from "../context/supplements.js";
 import type { LLMProvider, LLMRequest, LLMStreamEvent } from "../llm/types.js";
 import type { SessionStore } from "../session/types.js";
 import { randomId } from "../utils/ids.js";
@@ -23,6 +24,7 @@ export interface AgentLoopDependencies {
   followups: MessageQueue;
   session: SessionStore | undefined;
   contextRuntime: ContextRuntime | undefined;
+  contextSupplements?: () => readonly ContextSupplement[];
   contextTransform: ContextTransform;
   cwd: string;
   maxTurns: number;
@@ -170,6 +172,7 @@ async function prepareModelContext(
   const result = await deps.contextRuntime.prepare({
     systemPrompt: state.systemPrompt,
     history: state.messages,
+    supplements: deps.contextSupplements?.() ?? [],
     signal
   });
 
