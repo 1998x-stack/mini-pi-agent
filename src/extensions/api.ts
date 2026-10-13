@@ -1,3 +1,5 @@
+import type { Tool } from "../core/tool.js";
+import type { ToolRegistry } from "../core/tool-registry.js";
 import { ExtensionApiClosedError } from "./errors.js";
 import type {
   Disposable,
@@ -6,6 +8,7 @@ import type {
 } from "./hooks.js";
 import type { HookPipeline } from "./pipeline.js";
 import { ExtensionRegistrationSet } from "./registrations.js";
+import { registerOwnedTool } from "./tool-registrations.js";
 
 export interface ExtensionAPI {
   readonly extensionName: string;
@@ -14,6 +17,8 @@ export interface ExtensionAPI {
     hook: K,
     handler: HookHandler<K>
   ): Disposable;
+
+  registerTool(tool: Tool): Disposable;
 }
 
 /** Internal setup-scoped capability object. */
@@ -23,6 +28,7 @@ export class ScopedExtensionAPI implements ExtensionAPI {
   constructor(
     readonly extensionName: string,
     private readonly pipeline: HookPipeline,
+    private readonly tools: ToolRegistry,
     private readonly registrations: ExtensionRegistrationSet
   ) {}
 
@@ -31,6 +37,11 @@ export class ScopedExtensionAPI implements ExtensionAPI {
     return this.registrations.add(
       this.pipeline.register({ extensionName: this.extensionName }, hook, handler)
     );
+  }
+
+  registerTool(tool: Tool): Disposable {
+    this.assertOpen();
+    return registerOwnedTool(this.tools, this.registrations, tool);
   }
 
   close(): void {
