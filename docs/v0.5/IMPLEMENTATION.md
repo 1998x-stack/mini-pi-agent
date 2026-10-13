@@ -13,40 +13,41 @@ Secondary invariant:
 ```text
 v0.5.1  hook contracts + deterministic HookPipeline          ✅
 v0.5.2  ExtensionDefinition + ExtensionHost + ownership      ✅
+v0.5.3  Extension-owned Tool registration + unload cleanup   ✅
 ```
 
 ## v0.5.1 — Hook contracts + deterministic HookPipeline ✅
 
 Implemented typed lifecycle contracts, deterministic sequential HookPipeline execution, explicit `before_tool` continue/replace/block semantics, constrained `after_tool` transformation, context-contribution results, cancellation propagation, mutation isolation, `Disposable` hook registrations, and `ExtensionHookError` provenance.
 
-Reference ordering remains registration order only; there is no numeric priority system.
-
 ---
 
 ## v0.5.2 — ExtensionDefinition + scoped ExtensionAPI + ExtensionHost ✅
 
+Implemented normalized Extension identity, setup-scoped capability access, serialized async setup order, owned registrations, transaction-like setup rollback, reverse-order disposal, and exact hook cleanup on unload.
+
+---
+
+## v0.5.3 — Extension-owned Tool registration + unload cleanup ✅
+
 ### Implemented
 
 ```text
-src/extensions/types.ts
+src/core/errors.ts
+src/core/tool-registry.ts
 src/extensions/api.ts
 src/extensions/host.ts
-src/extensions/registrations.ts
-src/extensions/errors.ts
-src/extensions/index.ts
+src/extensions/tool-registrations.ts
+src/index.ts
 
-tests/extension-host.test.ts
+tests/extension-tools.test.ts
 ```
 
-### Public contracts
+### Public setup capability
+
+`ExtensionAPI` now exposes:
 
 ```ts
-interface ExtensionDefinition {
-  readonly name: string;
-  readonly version?: string;
-  setup(api: ExtensionAPI): void | Promise<void>;
-}
-
 interface ExtensionAPI {
   readonly extensionName: string;
 
@@ -54,107 +55,110 @@ interface ExtensionAPI {
     hook: K,
     handler: HookHandler<K>
   ): Disposable;
-}
 
-interface LoadedExtension {
-  readonly name: string;
-  readonly normalizedName: string;
-  readonly version?: string;
-  readonly loadIndex: number;
+  registerTool(tool: Tool): Disposable;
 }
 ```
 
-`ScopedExtensionAPI` and the owned registration set are Host implementation details, not package-level API.
+`registerTool()` is setup-scoped exactly like `on()`. Retaining the API and trying to register a Tool after setup closes fails through `ExtensionApiClosedError`.
 
-### Deterministic host semantics
+### Ordinary Tool path
 
-`ExtensionHost` serializes `load()` / `unload()` operations.
-
-This makes async setup deterministic:
+Extension Tools use the existing runtime Tool contract and registry:
 
 ```text
-load(A) called
-load(B) called
-
-A setup start
-A awaits
-A setup end
-B setup start
-```
-
-Hook registration order therefore follows Extension load invocation order rather than Promise completion timing.
-
-Extension identity uses:
-
-```text
-trim + lowercase
-```
-
-so `Policy`, `policy`, and ` POLICY ` collide explicitly through `DuplicateExtensionError`.
-
-### Setup-scoped capability rule
-
-`ExtensionAPI` is open only while `setup()` is executing.
-
-```text
-setup starts
-  ↓
-api.on(...) allowed
-  ↓
-setup resolves/rejects
-  ↓
-API closes
-```
-
-An Extension cannot retain the API and register hidden handlers later from a timer or unrelated callback. Attempts after setup fail with `ExtensionApiClosedError`.
-
-### Atomic setup / rollback
-
-Setup is transaction-like:
-
-```text
-validate ExtensionDefinition
+Extension.setup(api)
       ↓
-create owned registration set
+api.registerTool(tool)
       ↓
-open scoped API
+ToolRegistry.register(tool)
       ↓
-run setup()
+ToolRegistry.get / validate
       ↓
-SUCCESS                       FAILURE
-  │                              │
-close API                    close API
-  │                              │
-commit LoadedExtension       dispose all owned registrations
-                                 │
-                              no Host record
-                                 │
-                           ExtensionSetupError
+Tool.execute
 ```
 
-Registrations are disposed in reverse registration order, mirroring stack unwinding.
+There is no `ExtensionToolExecutor` and no second execution protocol.
 
-A failed setup cannot leave partially installed hooks behind.
+### Generic removable Tool registration
 
-### Unload ownership
+`ToolRegistry.register()` now returns an idempotent `ToolRegistration` handle while remaining source-compatible with callers that ignore the return value.
 
-Every setup registration is tracked by exactly one Host record.
+```ts
+interface ToolRegistration {
+  dispose(): void;
+}
+```
+
+Disposal is identity-safe:
 
 ```text
-Extension A → A1, A2
-Extension B → B1
-
-unload(A)
-→ dispose A2
-→ dispose A1
-→ B1 remains
+register Tool A under name X
+      ↓
+replace X with Tool B
+      ↓
+dispose old registration A
+      ↓
+Tool B remains
 ```
 
-Unknown unload targets fail explicitly through `UnknownExtensionError`.
+This prevents an old Extension registration handle from deleting a later replacement that it does not own.
+
+Duplicate names now fail through the core typed `ToolAlreadyRegisteredError` rather than a generic Error.
+
+### Ownership / rollback / unload
+
+Tool registrations enter the same `ExtensionRegistrationSet` as hook registrations.
+
+Therefore setup remains atomic across mixed registrations:
+
+```text
+register hook A
+register tool B
+register hook C
+setup throws
+      ↓
+dispose C
+remove B
+.dispose A
+      ↓
+no loaded Extension record
+```
+
+Likewise:
+
+```text
+Extension Alpha → alpha_tool + Alpha hooks
+Extension Beta  → beta_tool  + Beta hooks
+built-in Tool   → builtin
+
+unload(Alpha)
+→ alpha_tool removed
+→ Alpha hooks removed
+→ beta_tool remains
+→ Beta hooks remain
+→ builtin remains
+```
+
+Host accepts an optional shared `ToolRegistry`. If omitted it creates a private registry so existing hook-only v0.5.2 callers remain valid. Agent integration will later pass the Agent's ordinary ToolRegistry explicitly.
+
+### Collision semantics
+
+If an Extension tries to register a Tool name already owned by a built-in or another Extension:
+
+```text
+ToolRegistry.register()
+→ ToolAlreadyRegisteredError
+→ Extension setup fails
+→ previous registrations from that setup roll back
+→ ExtensionSetupError.cause preserves ToolAlreadyRegisteredError
+```
+
+No replacement shortcut is introduced for Extensions.
 
 ### Verification performed
 
-The extension source subset passed TypeScript checking under:
+The changed source subset passed TypeScript checking under:
 
 ```text
 strict
@@ -165,73 +169,57 @@ exactOptionalPropertyTypes
 Runtime smoke verified:
 
 ```text
-Alpha setup → hook installed
-Beta setup  → hook installed
-Broken setup registers hook then throws
-→ broken registration rolled back
-→ host list contains only Alpha/Beta
-
-captured setup API after success
-→ closed
-
-unload Alpha
-→ only Beta hook remains
+Extension Tool executes through ordinary ToolRegistry
+built-in collision preserves ToolAlreadyRegisteredError cause
+failed setup leaves built-in Tool untouched
+unload removes owned Extension Tool
+identity-safe old registration does not delete later replacement
 ```
 
-Focused tests additionally cover normalized duplicates, async load serialization, setup failure cause preservation, clone semantics, definition validation, unknown unload, and API closure after failed setup.
+Focused tests additionally cover ordinary validation/execution, mixed hook+Tool rollback, exact unload cleanup, late setup failure, setup-scoped `registerTool()`, and replacement safety.
 
 The full repository Vitest suite is not claimed as run in the current execution environment.
 
 ---
 
-## v0.5.3 — Extension-owned Tool registration + unload cleanup ← next
+## v0.5.4 — `before_tool` gate/replace Runtime integration ← next
 
 ### Goal
 
-Allow Extensions to register ordinary `Tool` objects while preserving ToolRegistry semantics and registration ownership.
-
-### Add/update
-
-```text
-src/extensions/api.ts
-src/extensions/host.ts
-src/extensions/registrations.ts
-src/extensions/tool-registrations.ts
-src/core/tool-registry.ts only through a generic removable-registration seam
-
-tests/extension-tools.test.ts
-```
+Integrate the already-implemented HookPipeline into the ordinary Agent tool execution path without teaching AgentLoop any concrete Extension policy.
 
 ### Required flow
 
 ```text
-Extension.setup(api)
+Assistant ToolCall
       ↓
-api.registerTool(tool)
+ToolRegistry.get(original name)
       ↓
-owned Tool registration
+before_tool HookPipeline
+      ├── continue
+      ├── replace arguments only
+      └── block with extension provenance
       ↓
-ordinary ToolRegistry
+if continue:
+ToolRegistry.validate(final args)
       ↓
-LLM sees ordinary Tool
+Tool.execute(final args)
+
+if blocked:
+explicit ToolResultMessage
+isError = true
+actual Tool.execute() is never called
 ```
 
 ### Must prove
 
-- extension Tools use the same Tool contract as built-ins;
-- no separate ExtensionTool executor exists;
-- tool-name collision fails explicitly;
-- failed setup rolls back both hook and Tool registrations;
-- unload removes only Tools owned by the target Extension;
-- other built-in/Extension Tools remain registered;
-- duplicate/replacement shortcuts are not introduced;
-- no Agent integration yet.
-
----
-
-## v0.5.4 — `before_tool` gate/replace integration
-
-Integrate HookPipeline into the ordinary tool execution path. Only arguments may be replaced; blocked calls become explicit error ToolResults and the actual tool must not execute.
+- ToolCall `id` and `name` remain unchanged;
+- replacement arguments are what validation and execution receive;
+- block short-circuits execution;
+- blocked calls become durable explicit observations rather than disappearing;
+- built-in and Extension Tools pass through the same hook path;
+- hook failure/cancellation semantics remain those defined in v0.5.1;
+- AgentLoop knows only generic HookPipeline semantics, never Extension names.
 
 ---
 
@@ -263,8 +251,10 @@ Expose `AgentOptions.extensions`, prove the complete lifecycle end to end, add a
 - [x] registration ownership
 - [x] failed setup rollback
 - [x] hook unload cleanup
-- [ ] extension Tool registration
-- [ ] Tool unload cleanup
+- [x] extension Tool registration
+- [x] Tool unload cleanup
+- [x] typed Tool collision semantics
+- [x] identity-safe removable Tool registration
 - [ ] before_tool Agent/runtime integration
 - [ ] budgeted before_model contributions
 - [ ] remaining run/model/tool hooks
