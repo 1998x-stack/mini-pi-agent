@@ -51,6 +51,11 @@ export {
   type ProjectSkillSourceOptions
 } from "./project-source.js";
 export { normalizeSkillName, SkillRegistry } from "./registry.js";
+export {
+  SkillRuntime,
+  type CreateSkillRuntimeInput,
+  type SkillRuntimeOptions
+} from "./runtime.js";
 export type { SkillSource } from "./source.js";
 export type {
   LoadedSkill,
