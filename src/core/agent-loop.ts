@@ -1,5 +1,6 @@
 import type { ContextRuntime } from "../context/runtime.js";
 import type { ContextSupplement } from "../context/supplements.js";
+import type { HookPipeline } from "../extensions/pipeline.js";
 import type { LLMProvider, LLMRequest, LLMStreamEvent } from "../llm/types.js";
 import type { SessionStore } from "../session/types.js";
 import { randomId } from "../utils/ids.js";
@@ -7,18 +8,20 @@ import { MaxTurnsExceededError } from "./errors.js";
 import type { ContextTransform } from "./context.js";
 import type { EventBus } from "./events.js";
 import type { MessageQueue } from "./queues.js";
+import { executeToolCall } from "./tool-execution.js";
 import type { ToolRegistry } from "./tool-registry.js";
 import type {
   AgentMessage,
   AgentRunResult,
   AgentState,
-  AssistantMessage,
-  ToolResultMessage
+  AssistantMessage
 } from "./types.js";
 
 export interface AgentLoopDependencies {
   provider: LLMProvider;
   tools: ToolRegistry;
+  /** Optional generic lifecycle pipeline. AgentLoop never knows Extension names. */
+  hooks?: HookPipeline;
   events: EventBus;
   steering: MessageQueue;
   followups: MessageQueue;
@@ -74,31 +77,19 @@ export async function runAgentLoop(
         for (const call of assistant.toolCalls) {
           signal.throwIfAborted();
           await deps.events.emit({ type: "tool_start", runId, turn, call });
-          let result: ToolResultMessage;
-          try {
-            const tool = deps.tools.get(call.name);
-            deps.tools.validate(tool, call.arguments);
-            const output = await tool.execute(call.arguments, { cwd: deps.cwd, signal });
-            result = {
-              role: "tool",
-              toolCallId: call.id,
-              toolName: call.name,
-              content: output.content,
-              isError: false,
-              timestamp: Date.now()
-            };
-          } catch (error) {
-            result = {
-              role: "tool",
-              toolCallId: call.id,
-              toolName: call.name,
-              content: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
-              isError: true,
-              timestamp: Date.now()
-            };
-          }
-          await addMessage(state, result, runId, deps);
-          await deps.events.emit({ type: "tool_end", runId, turn, result });
+
+          const outcome = await executeToolCall({
+            call,
+            tools: deps.tools,
+            ...(deps.hooks ? { hooks: deps.hooks } : {}),
+            cwd: deps.cwd,
+            runId,
+            turn,
+            signal
+          });
+
+          await addMessage(state, outcome.result, runId, deps);
+          await deps.events.emit({ type: "tool_end", runId, turn, result: outcome.result });
         }
 
         const steeringMessages = deps.steering.drain();
