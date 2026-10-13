@@ -2,265 +2,364 @@
 
 A small, extensible **Pi-style Agent Runtime** written from first principles in TypeScript.
 
-The project is organized as educational version snapshots. The `v0.3` branch focuses on one mental model:
+The repository is organized as educational version snapshots. The `v0.4` branch focuses on one mental model:
+
+> **A Skill is discoverable workflow knowledge, not an executor.**
+
+It builds directly on the v0.3 invariant:
 
 > **Durable history is not the same thing as model-visible context.**
 
-The runtime keeps the full conversation/session history while deriving a bounded model context through explicit budgeting, causal units, large-observation reduction, summary checkpoints, and progressive compaction.
+Together they produce a clean separation:
 
-## 1. Core agent loop
+```text
+knowledge
+!=
+execution
+!=
+durable history
+!=
+model-visible context
+```
+
+## 1. Core feedback loop
 
 ```text
 User
   ↓
-messages.push(user)
-  ↓
-prepare model context
+Agent Loop
   ↓
 LLM(context, tools)
-  ├──────────── no tool calls ───────────► final answer
+  ├──────── no tool calls ───────► final answer
   │
-  └──────────── tool calls
-                    ↓
-               execute tools
-                    ↓
-               tool results
-                    └────────────────────► next model turn
+  └──────── tool calls
+               ↓
+          runtime executes
+               ↓
+          ToolResultMessage
+               └─────────────────► next model turn
 ```
 
-The irreducible feedback loop is still easy to find in `src/core/agent-loop.ts`. v0.3 adds context preparation at the model-call boundary rather than turning the loop into a compaction monolith.
+v0.4 does not replace this loop. Skills sit above it and reuse the existing ToolCall → ToolResult feedback mechanism.
 
-## 2. v0.3 architecture
+## 2. v0.4 Skills architecture
 
 ```text
-Durable AgentMessage[] history
-          │
-          ├──────────────► SessionStore / historical truth
-          │
-          ├── ContextUnitBuilder
-          │       ↓
-          │   ToolResultReducer
-          │       ↓
-          │   ContextPlanner
-          │       ↓
-          │   PreparedContext
-          │
-          └── old-history prefix
-                  ↓
-          ProgressiveSummaryPolicy
-                  │
-                  ├── previous checkpoint
-                  ├── newly covered messages
-                  └── ContextSummarizer
-                  ↓
-             ContextSummary
-                  ↓
-             SummaryStore
-
-ContextRuntime
-    ↓
-summary-aware system context + recent messages
-    ↓
-LLMProvider
+<cwd>/.mini-pi/skills/*/SKILL.md
+              │
+              ▼
+      ProjectSkillSource
+              │
+              ▼
+      SkillDescriptor[]
+              │
+              ▼
+        SkillRegistry
+          │         │
+          │         └──── compact catalog ───────────┐
+          │ selected descriptor                      │
+          ▼                                          │
+    FilesystemSkillLoader                            │
+          │                                          │
+          ▼                                          │
+       LoadedSkill                                   │
+          │                                          │
+          ▼                                          │
+ SkillActivationService                              │
+          │                                          │
+          ▼                                          │
+   ActiveSkillStore                                  │
+          │                                          │
+          └──── active-skill supplements ─────────────┘
+                             │
+                             ▼
+                     ContextSupplement[]
+                             │
+                             ▼
+                       ContextRuntime
+                             │
+                             ▼
+                       ContextPlanner
+                             │
+                             ▼
+                      PreparedContext
+                             │
+                             ▼
+                        LLMProvider
 ```
 
-Three objects remain intentionally different:
+`runAgentLoop()` remains Skill-agnostic. It only knows an optional generic `contextSupplements()` provider.
+
+## 3. Progressive disclosure
 
 ```text
-Durable History
-≠
-Prepared Model Context
-≠
-Summary Checkpoint
+Level 0
+SkillDescriptor
+name + description
+
+        ↓ activate
+
+Level 1
+selected SKILL.md instructions
+
+        ↓ explicit need
+
+Level 2
+references/*
+read through ordinary file tools
+
+        ↓ explicit execution
+
+Level 3
+scripts/assets/templates
+use ordinary execution/file tools
 ```
 
-A summary never authorizes deleting durable history.
+A project may contain many Skills while only a compact catalog and the explicitly activated bodies enter the model context.
 
-## 3. What v0.3 contains
+## 4. Skill package format
 
-- v0.1 Agent facade and readable Agent Loop
-- provider-neutral `LLMProvider`
-- `Tool` + `ToolRegistry`
-- rooted file tools and opt-in shell tool
-- lifecycle event bus, cancellation, steering and follow-up queues
-- append-only session abstraction
-- `ContextBudget` and deterministic token-estimation contract
-- causal `ContextUnit` modeling
-- tool-call/result atomicity
-- Unicode-safe `HeadTailToolResultReducer`
-- `PreparedContext` and `KeepRecentContextPlanner`
-- explicit `ContextSummary` checkpoints
-- monotonic `SummaryStore`
-- `ContextSummarizer`
-- deterministic offline summarizer
-- `ProgressiveSummaryPolicy`
-- summary failure atomicity and cancellation semantics
-- `ContextRuntime` orchestration
-- context lifecycle events
-- end-to-end Agent integration
-
-## 4. The v0.3 model-call boundary
-
-When `AgentOptions.context` is configured:
+Reference layout:
 
 ```text
-state.messages
-      │
-      │ remains complete
-      ▼
-ContextRuntime.prepare()
-      │
-      ├── reads latest SummaryStore checkpoint
-      ├── plans recent durable tail
-      ├── advances summary if older unsummarized units must be omitted
-      └── re-plans until context is stable
-      │
-      ▼
+.mini-pi/skills/
+└── code-review/
+    ├── SKILL.md
+    ├── references/
+    ├── scripts/
+    └── assets/
+```
+
+Only `SKILL.md` is required.
+
+```markdown
+---
+name: code-review
+description: Review code changes for bugs and regressions.
+owner: project
+---
+
+# Code Review
+
+1. Inspect the diff.
+2. Identify behavior changes.
+3. Check tests and regression risk.
+```
+
+v0.4 intentionally supports a deterministic scalar frontmatter subset rather than a full YAML implementation.
+
+## 5. Discovery and loading are different
+
+```text
+discover
+→ descriptor only
+
+load
+→ selected SKILL.md body only
+
+activate
+→ run-scoped active state
+
+execute
+→ ordinary tools only
+```
+
+The reference loader validates lexical containment, file type, symlink behavior, canonical `realpath`, and descriptor/manifest identity before returning `LoadedSkill`.
+
+It does **not** automatically traverse or execute `references/`, `scripts/`, or `assets/`.
+
+## 6. Model-driven activation
+
+When Skills are enabled, the Agent automatically registers the ordinary tool:
+
+```text
+load_skill(name)
+```
+
+Flow:
+
+```text
+model sees compact catalog
+      ↓
+load_skill("code-review")
+      ↓
+SkillActivationService
+      ↓
+ActiveSkillStore
+      ↓
+compact durable ToolResult
+      ↓
+next model turn
+      ↓
+full code-review instructions via ContextSupplement
+```
+
+The ToolResult stays small:
+
+```text
+Skill 'code-review' activated.
+```
+
+The full Skill body is never duplicated into durable tool history.
+
+## 7. Context budgeting
+
+Skills require `AgentOptions.context`.
+
+This is intentional: catalog and active Skill bodies must be included **before** `ContextPlanner.prepare()` so token accounting remains correct.
+
+```text
+base system prompt
+      ↓
+summary checkpoint
+      ↓
+Skill catalog + active Skill supplements
+      ↓
+ContextPlanner
+      ↓
 PreparedContext
-      │
-      ▼
-LLMRequest
 ```
 
-The stored summary is rendered as **model-only system context**. It is not inserted into `state.messages` and is not appended to `SessionStore`.
+If mandatory Skill material itself makes the input budget impossible, the runtime fails explicitly rather than appending text after planning or silently dropping an active Skill.
 
-## 5. Minimal v0.3 configuration
+## 8. Run-scoped activation
+
+Active Skills live for one `Agent.prompt()` run:
+
+```text
+prompt() start
+   ↓
+active store cleared
+   ↓
+model may activate Skills
+   ↓
+active bodies persist across turns in this run
+   ↓
+prompt() finally
+   ↓
+active store cleared
+```
+
+The catalog persists for the Agent lifetime, but active bodies do not leak into the next prompt.
+
+## 9. Skill lifecycle events
+
+Skill activation emits metadata-only events:
+
+```text
+skill_activation_start
+skill_activated
+skill_activation_reused
+skill_activation_failed
+```
+
+Origins are:
+
+```text
+api | manual | tool
+```
+
+Events never contain full Skill instructions. Agent integration bridges these events into the regular Agent event stream with `runId` and `turn` metadata.
+
+## 10. Minimal configuration
 
 ```ts
 const estimator = new ApproximateTokenEstimator();
-const summaryStore = new InMemorySummaryStore();
-const summaryPolicy = new ProgressiveSummaryPolicy({
-  summarizer: new DeterministicContextSummarizer(),
-  store: summaryStore,
-  estimator
-});
 
 const agent = await Agent.create({
   provider,
-  session,
+  cwd: process.cwd(),
   context: {
     planner: new KeepRecentContextPlanner({ estimator }),
     budget: {
       contextWindow: 32_000,
       outputReserve: 4_000,
       safetyMargin: 1_000
-    },
-    summaryStore,
-    summaryPolicy
-  }
+    }
+  },
+  skills: {}
 });
+
+await agent.prompt("Review this change.");
 ```
 
-For compatibility, callers that do not configure `AgentOptions.context` still use the older `ContextTransform` seam.
-
-## 6. Context lifecycle events
-
-v0.3 adds observable context preparation events:
+Project Skills are discovered from:
 
 ```text
-context_prepare_start
-context_summary_advanced
-context_prepared
+<cwd>/.mini-pi/skills/*/SKILL.md
 ```
 
-These events expose compaction behavior without making UI/logging own context policy.
-
-Existing runtime events such as `agent_start`, `turn_start`, `text_delta`, `tool_start`, `tool_end`, `message_added`, `turn_end`, and `agent_end` remain available.
-
-## 7. Project structure
+## 11. Project structure
 
 ```text
-mini-pi-agent/
-├── Agents.md
-├── Plan.md
-├── version.md
-├── src/
-│   ├── core/
-│   │   ├── agent.ts
-│   │   ├── agent-loop.ts
-│   │   ├── context.ts          legacy compatibility seam
-│   │   ├── events.ts
-│   │   └── ...
-│   ├── context/
-│   │   ├── budget.ts
-│   │   ├── estimator.ts
-│   │   ├── units.ts
-│   │   ├── tool-result-reducer.ts
-│   │   ├── planner.ts
-│   │   ├── runtime.ts
-│   │   ├── summary.ts
-│   │   ├── summary-store.ts
-│   │   ├── summarizer.ts
-│   │   └── policies/
-│   │       ├── keep-recent.ts
-│   │       └── progressive-summary.ts
-│   ├── llm/
-│   ├── session/
-│   ├── tools/
-│   └── index.ts
-├── examples/
-│   └── 07-context-compaction.ts
-├── tests/
-└── docs/v0.3/
+src/
+├── core/
+│   ├── agent.ts
+│   ├── agent-loop.ts
+│   └── events.ts
+├── context/
+│   ├── runtime.ts
+│   ├── supplements.ts
+│   └── ...
+├── skills/
+│   ├── manifest-parser.ts
+│   ├── project-source.ts
+│   ├── registry.ts
+│   ├── paths.ts
+│   ├── loader.ts
+│   ├── catalog.ts
+│   ├── active-store.ts
+│   ├── activation-service.ts
+│   ├── load-skill-tool.ts
+│   ├── events.ts
+│   ├── manual-activation.ts
+│   └── runtime.ts
+└── index.ts
+
+examples/
+├── 07-context-compaction.ts
+├── 08-skill-manual-activation.ts
+└── 09-progressive-skills.ts
 ```
 
-## 8. Run
+## 12. Run
 
 ```bash
 npm install
 npm run check
 npm run demo:context
+npm run demo:skills
 ```
 
-The context example demonstrates all three layers at once:
+`demo:skills` shows the complete v0.4 learning path:
 
 ```text
-complete durable history
-summary checkpoint
-provider-visible recent tail
+first model request
+→ compact catalog only
+
+model calls load_skill
+→ compact ToolResult
+
+second model request
+→ catalog + selected full Skill body
+
+next Agent.prompt()
+→ catalog only again
 ```
 
-## 9. Recommended v0.3 reading order
-
-1. `Agents.md`
-2. `version.md`
-3. `docs/v0.3/ARCHITECTURE.md`
-4. `src/context/budget.ts`
-5. `src/context/units.ts`
-6. `src/context/tool-result-reducer.ts`
-7. `src/context/policies/keep-recent.ts`
-8. `src/context/summary.ts`
-9. `src/context/policies/progressive-summary.ts`
-10. `src/context/runtime.ts`
-11. `src/core/agent-loop.ts`
-12. `tests/agent-context-integration.test.ts`
-13. `examples/07-context-compaction.ts`
-
-## 10. Version strategy
+## 13. Version snapshots
 
 ```text
-v0.1  core feedback loop                         historical snapshot
-v0.2  streaming + ToolScheduler                  separate version work
-v0.3  context budget + progressive compaction    this branch
-v0.4  Skills                                     planned
-v0.5  Extensions / Hooks                         planned
-v0.6  MCP adapter                                planned
-v0.7  session tree / branching                   planned
-v0.8  permission + sandbox policy                planned
-v0.9  RPC / headless runtime                     planned
-v1.0  stable runtime API                         planned
+v0.1  core feedback loop
+v0.2  streaming + scheduling
+v0.3  context budget + compaction
+v0.4  Skills + progressive disclosure
+v0.5  extensions/hooks
+v0.6  MCP
+v0.7  session tree
+v0.8  permissions/sandbox
+v0.9  RPC/headless runtime
+v1.0  stable public API
 ```
 
-Read `Plan.md` for the architectural roadmap and `version.md` for the exact state of this branch.
-
-## 11. Safety and architecture rules
-
-- durable history must never be silently destroyed;
-- a tool exchange is a causal unit and must not be cut in half;
-- large observations are reduced only in model-visible copies;
-- summary checkpoints cover explicit durable-history prefixes;
-- checkpoint coverage moves monotonically;
-- cancellation before summary commit must preserve the previous checkpoint;
-- context policy stays outside tool execution;
-- summary artifacts are not durable conversation messages;
-- the Agent Loop depends on context contracts, not on summarization implementation details.
+`v0.4` is a frozen educational snapshot for the Skills mental model.
