@@ -1,6 +1,11 @@
 import { ContextRuntime, type ContextRuntimeOptions } from "../context/runtime.js";
 import type { LLMProvider } from "../llm/types.js";
 import type { SessionStore } from "../session/types.js";
+import {
+  SkillRuntime,
+  type SkillRuntimeOptions
+} from "../skills/runtime.js";
+import type { SkillActivationEvent } from "../skills/events.js";
 import { runAgentLoop } from "./agent-loop.js";
 import { IdentityContextTransform, type ContextTransform } from "./context.js";
 import { EventBus, type AgentEventListener } from "./events.js";
@@ -18,6 +23,8 @@ export interface AgentOptions {
   session?: SessionStore;
   /** v0.3 model-context runtime. Mutually exclusive with legacy contextTransform. */
   context?: ContextRuntimeOptions;
+  /** v0.4 project Skills. Requires `context` so Skill material is budget-accounted. */
+  skills?: SkillRuntimeOptions;
   /** Legacy v0.1 teaching seam retained for compatibility. */
   contextTransform?: ContextTransform;
 }
@@ -38,6 +45,7 @@ export class Agent {
       maxTurns: number;
       session: SessionStore | undefined;
       contextRuntime: ContextRuntime | undefined;
+      skillRuntime: SkillRuntime | undefined;
       contextTransform: ContextTransform;
     },
     state: AgentState,
@@ -51,7 +59,11 @@ export class Agent {
     if (options.context && options.contextTransform) {
       throw new Error("AgentOptions.context and contextTransform are mutually exclusive");
     }
+    if (options.skills && !options.context) {
+      throw new Error("AgentOptions.skills requires AgentOptions.context so Skill material is budget-accounted");
+    }
 
+    const cwd = options.cwd ?? process.cwd();
     const previousMessages = options.session ? await options.session.load() : [];
     const state: AgentState = {
       systemPrompt: options.systemPrompt ?? "You are a precise, helpful agent.",
@@ -61,18 +73,34 @@ export class Agent {
       turn: 0
     };
 
-    return new Agent(
+    const contextRuntime = options.context ? new ContextRuntime(options.context) : undefined;
+    const skillRuntime = options.skills
+      ? await SkillRuntime.create({
+          cwd,
+          signal: new AbortController().signal,
+          ...options.skills
+        })
+      : undefined;
+
+    const tools = new ToolRegistry(options.tools ?? []);
+    if (skillRuntime) tools.register(skillRuntime.loadSkillTool);
+
+    const agent = new Agent(
       {
         provider: options.provider,
-        cwd: options.cwd ?? process.cwd(),
+        cwd,
         maxTurns: options.maxTurns ?? 24,
         session: options.session,
-        contextRuntime: options.context ? new ContextRuntime(options.context) : undefined,
+        contextRuntime,
+        skillRuntime,
         contextTransform: options.contextTransform ?? new IdentityContextTransform()
       },
       state,
-      new ToolRegistry(options.tools ?? [])
+      tools
     );
+
+    agent.bridgeSkillEvents();
+    return agent;
   }
 
   subscribe(listener: AgentEventListener): () => void {
@@ -92,6 +120,9 @@ export class Agent {
   }
 
   async prompt(input: string, signal?: AbortSignal): Promise<AgentRunResult> {
+    if (this.state.running) throw new Error("Agent is already running");
+    this.options.skillRuntime?.clearActive();
+
     const controller = new AbortController();
     this.activeController = controller;
 
@@ -113,6 +144,9 @@ export class Agent {
           followups: this.followups,
           session: this.options.session,
           contextRuntime: this.options.contextRuntime,
+          ...(this.options.skillRuntime
+            ? { contextSupplements: () => this.options.skillRuntime!.supplements() }
+            : {}),
           contextTransform: this.options.contextTransform,
           cwd: this.options.cwd,
           maxTurns: this.options.maxTurns
@@ -121,7 +155,36 @@ export class Agent {
       );
     } finally {
       signal?.removeEventListener("abort", forwardAbort);
+      this.options.skillRuntime?.clearActive();
       this.activeController = undefined;
     }
+  }
+
+  private bridgeSkillEvents(): void {
+    const runtime = this.options.skillRuntime;
+    if (!runtime) return;
+
+    runtime.events.subscribe(async (event) => {
+      const runId = this.state.runId;
+      if (!runId) return;
+      const turn = this.state.turn;
+      await this.emitSkillEvent(event, runId, turn);
+    });
+  }
+
+  private async emitSkillEvent(
+    event: SkillActivationEvent,
+    runId: string,
+    turn: number
+  ): Promise<void> {
+    if (event.type === "skill_activation_start") {
+      await this.events.emit({ ...event, runId, turn });
+      return;
+    }
+    if (event.type === "skill_activated" || event.type === "skill_activation_reused") {
+      await this.events.emit({ ...event, runId, turn });
+      return;
+    }
+    await this.events.emit({ ...event, runId, turn });
   }
 }
