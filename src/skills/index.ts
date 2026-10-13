@@ -1,4 +1,15 @@
 export {
+  InMemoryActiveSkillStore,
+  cloneLoadedSkill,
+  type ActiveSkillStore
+} from "./active-store.js";
+export {
+  SkillActivationService,
+  type SkillActivationResult,
+  type SkillActivationServiceOptions,
+  type SkillActivationStatus
+} from "./activation-service.js";
+export {
   createLoadedSkillSupplement,
   createSkillCatalogSupplement,
   renderSkillCatalog,
@@ -7,15 +18,18 @@ export {
 } from "./catalog.js";
 export {
   DuplicateSkillError,
+  InvalidSkillActivationError,
   InvalidSkillManifestError,
   SkillError,
   SkillIdentityMismatchError,
-  SkillPathError
+  SkillPathError,
+  UnknownSkillError
 } from "./errors.js";
 export {
   FilesystemSkillLoader,
   type SkillLoader
 } from "./loader.js";
+export { LoadSkillTool } from "./load-skill-tool.js";
 export { parseSkillDocument } from "./manifest-parser.js";
 export {
   isPathWithinRoot,
