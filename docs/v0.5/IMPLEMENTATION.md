@@ -8,87 +8,149 @@ Secondary invariant:
 
 > AgentLoop must remain extension-name agnostic.
 
-## v0.5.1 — Hook contracts + deterministic HookPipeline ✅ implemented
+## Completed
+
+```text
+v0.5.1  hook contracts + deterministic HookPipeline          ✅
+v0.5.2  ExtensionDefinition + ExtensionHost + ownership      ✅
+```
+
+## v0.5.1 — Hook contracts + deterministic HookPipeline ✅
+
+Implemented typed lifecycle contracts, deterministic sequential HookPipeline execution, explicit `before_tool` continue/replace/block semantics, constrained `after_tool` transformation, context-contribution results, cancellation propagation, mutation isolation, `Disposable` hook registrations, and `ExtensionHookError` provenance.
+
+Reference ordering remains registration order only; there is no numeric priority system.
+
+---
+
+## v0.5.2 — ExtensionDefinition + scoped ExtensionAPI + ExtensionHost ✅
 
 ### Implemented
 
 ```text
-src/extensions/hooks.ts
+src/extensions/types.ts
+src/extensions/api.ts
+src/extensions/host.ts
+src/extensions/registrations.ts
 src/extensions/errors.ts
-src/extensions/pipeline.ts
 src/extensions/index.ts
-src/index.ts
 
-tests/extension-hooks.test.ts
+tests/extension-host.test.ts
 ```
 
-### Hook surface
+### Public contracts
+
+```ts
+interface ExtensionDefinition {
+  readonly name: string;
+  readonly version?: string;
+  setup(api: ExtensionAPI): void | Promise<void>;
+}
+
+interface ExtensionAPI {
+  readonly extensionName: string;
+
+  on<K extends HookName>(
+    hook: K,
+    handler: HookHandler<K>
+  ): Disposable;
+}
+
+interface LoadedExtension {
+  readonly name: string;
+  readonly normalizedName: string;
+  readonly version?: string;
+  readonly loadIndex: number;
+}
+```
+
+`ScopedExtensionAPI` and the owned registration set are Host implementation details, not package-level API.
+
+### Deterministic host semantics
+
+`ExtensionHost` serializes `load()` / `unload()` operations.
+
+This makes async setup deterministic:
 
 ```text
-before_run
-before_model
-after_model
-before_tool
-after_tool
-after_turn
-after_run
+load(A) called
+load(B) called
+
+A setup start
+A awaits
+A setup end
+B setup start
 ```
 
-`HookPipeline.register(owner, hook, handler)` records explicit extension ownership and returns an idempotent `Disposable`.
+Hook registration order therefore follows Extension load invocation order rather than Promise completion timing.
 
-Ordering is deliberately simple:
+Extension identity uses:
 
 ```text
-registration order only
+trim + lowercase
 ```
 
-There is no numeric priority system.
+so `Policy`, `policy`, and ` POLICY ` collide explicitly through `DuplicateExtensionError`.
 
-### Mutation model
+### Setup-scoped capability rule
 
-Handlers receive cloned event objects. Direct mutation of the event clone has no runtime meaning.
-
-Only explicit return values participate in behavior:
+`ExtensionAPI` is open only while `setup()` is executing.
 
 ```text
-before_run / before_model
-→ ContextSupplement contributions
-
-after_model / after_turn / after_run
-→ observe only
-
-before_tool
-→ continue
-→ replace arguments
-→ block with reason
-
-after_tool
-→ constrained current ToolResult replacement
+setup starts
+  ↓
+api.on(...) allowed
+  ↓
+setup resolves/rejects
+  ↓
+API closes
 ```
 
-`before_tool` replacement preserves ToolCall `id` and `name`; only `arguments` may change. Each later handler observes the transformed arguments produced by the previous handler.
+An Extension cannot retain the API and register hidden handlers later from a timer or unrelated callback. Attempts after setup fail with `ExtensionApiClosedError`.
 
-A block short-circuits remaining handlers and returns blocking `extensionName` provenance.
+### Atomic setup / rollback
 
-### Error and cancellation semantics
-
-Normal handler exceptions become:
+Setup is transaction-like:
 
 ```text
-ExtensionHookError
+validate ExtensionDefinition
+      ↓
+create owned registration set
+      ↓
+open scoped API
+      ↓
+run setup()
+      ↓
+SUCCESS                       FAILURE
+  │                              │
+close API                    close API
+  │                              │
+commit LoadedExtension       dispose all owned registrations
+                                 │
+                              no Host record
+                                 │
+                           ExtensionSetupError
 ```
 
-with:
+Registrations are disposed in reverse registration order, mirroring stack unwinding.
+
+A failed setup cannot leave partially installed hooks behind.
+
+### Unload ownership
+
+Every setup registration is tracked by exactly one Host record.
 
 ```text
-extensionName
-hook
-cause
+Extension A → A1, A2
+Extension B → B1
+
+unload(A)
+→ dispose A2
+→ dispose A1
+→ B1 remains
 ```
 
-If the run AbortSignal is cancelled, the original abort reason propagates rather than being wrapped as an extension failure. Cancellation is checked before and after every awaited handler, so later handlers do not run after abort.
-
-Blank owner names fail through `InvalidHookRegistrationError`.
+Unknown unload targets fail explicitly through `UnknownExtensionError`.
 
 ### Verification performed
 
@@ -103,107 +165,85 @@ exactOptionalPropertyTypes
 Runtime smoke verified:
 
 ```text
-handler A sees n=1 → replace n=2
-handler B sees n=2 → replace n=3
-gate sees n=3 → block
+Alpha setup → hook installed
+Beta setup  → hook installed
+Broken setup registers hook then throws
+→ broken registration rolled back
+→ host list contains only Alpha/Beta
 
-final call arguments.n = 3
-blocking extension = gate
-source event unchanged
+captured setup API after success
+→ closed
+
+unload Alpha
+→ only Beta hook remains
 ```
 
-It also verified original abort-reason propagation and `ExtensionHookError` cause/owner/hook provenance.
+Focused tests additionally cover normalized duplicates, async load serialization, setup failure cause preservation, clone semantics, definition validation, unknown unload, and API closure after failed setup.
 
 The full repository Vitest suite is not claimed as run in the current execution environment.
 
 ---
 
-## v0.5.2 — ExtensionDefinition + ExtensionHost + ownership ← next
+## v0.5.3 — Extension-owned Tool registration + unload cleanup ← next
 
 ### Goal
 
-Create a scoped setup API and one owner for loaded Extensions.
+Allow Extensions to register ordinary `Tool` objects while preserving ToolRegistry semantics and registration ownership.
 
-### Add
+### Add/update
 
 ```text
-src/extensions/types.ts
 src/extensions/api.ts
 src/extensions/host.ts
 src/extensions/registrations.ts
+src/extensions/tool-registrations.ts
+src/core/tool-registry.ts only through a generic removable-registration seam
 
-tests/extension-host.test.ts
+tests/extension-tools.test.ts
 ```
 
-### Target API
+### Required flow
 
-```ts
-interface ExtensionDefinition {
-  name: string;
-  version?: string;
-  setup(api: ExtensionAPI): void | Promise<void>;
-}
-
-interface ExtensionAPI {
-  readonly extensionName: string;
-
-  on<K extends HookName>(
-    hook: K,
-    handler: HookHandler<K>
-  ): Disposable;
-}
+```text
+Extension.setup(api)
+      ↓
+api.registerTool(tool)
+      ↓
+owned Tool registration
+      ↓
+ordinary ToolRegistry
+      ↓
+LLM sees ordinary Tool
 ```
 
-### Required semantics
+### Must prove
 
-- normalized duplicate extension names fail explicitly;
-- extension load order is deterministic;
-- handler registration order inside each extension is preserved;
-- every registration is owned by exactly one extension;
-- failed setup is atomic and leaves no registrations behind;
-- unload removes exactly the target extension's registrations;
-- an extension receives capabilities, not mutable Agent internals;
+- extension Tools use the same Tool contract as built-ins;
+- no separate ExtensionTool executor exists;
+- tool-name collision fails explicitly;
+- failed setup rolls back both hook and Tool registrations;
+- unload removes only Tools owned by the target Extension;
+- other built-in/Extension Tools remain registered;
+- duplicate/replacement shortcuts are not introduced;
 - no Agent integration yet.
-
----
-
-## v0.5.3 — Extension-owned Tool registration + unload cleanup
-
-Add `registerTool()` to ExtensionAPI and owned ToolRegistry integration. Built-in and extension Tools must share the ordinary Tool path; collisions fail explicitly and unload removes only owned Tools.
 
 ---
 
 ## v0.5.4 — `before_tool` gate/replace integration
 
-Integrate the v0.5.1 pipeline into ordinary tool execution:
-
-```text
-Assistant ToolCall
-      ↓
-before_tool
-      ↓
-continue / replaced arguments / blocked
-      ↓
-ToolRegistry.validate(final args)
-      ↓
-Tool.execute
-```
-
-Blocked calls become explicit error ToolResults rather than disappearing.
+Integrate HookPipeline into the ordinary tool execution path. Only arguments may be replaced; blocked calls become explicit error ToolResults and the actual tool must not execute.
 
 ---
 
 ## v0.5.5 — Model/run hooks + budgeted context contributions
 
-Integrate `before_run`, `before_model`, `after_model`, `after_tool`, `after_turn`, and `after_run` at stable lifecycle points.
-
-Extension-added model context must enter as ContextSupplements before ContextRuntime/ContextPlanner budgeting.
+Integrate `before_run`, `before_model`, `after_model`, `after_tool`, `after_turn`, and `after_run`. Extension model context must enter as `ContextSupplement[]` before ContextRuntime budgeting.
 
 ---
 
 ## v0.5.6 — Failure + cancellation + cleanup + observability
 
-Refine strict-vs-cleanup failure semantics and add metadata-only extension lifecycle/hook trace events. `after_run` cleanup attempts must remain deterministic even when one cleanup handler fails.
+Refine strict-vs-cleanup failure semantics and add metadata-only Extension lifecycle/hook trace events. Cleanup attempts must remain deterministic when one cleanup handler fails.
 
 ---
 
@@ -218,13 +258,16 @@ Expose `AgentOptions.extensions`, prove the complete lifecycle end to end, add a
 - [x] ExtensionHookError provenance
 - [x] cancellation propagation through hooks
 - [x] handler mutation isolation
-- [ ] ExtensionDefinition + scoped ExtensionAPI
-- [ ] ExtensionHost + registration ownership
-- [ ] unload cleanup
+- [x] ExtensionDefinition + scoped ExtensionAPI
+- [x] ExtensionHost deterministic load order
+- [x] registration ownership
+- [x] failed setup rollback
+- [x] hook unload cleanup
 - [ ] extension Tool registration
-- [ ] before_tool gate/replace Agent integration
+- [ ] Tool unload cleanup
+- [ ] before_tool Agent/runtime integration
 - [ ] budgeted before_model contributions
-- [ ] remaining run/model/tool hook integration
+- [ ] remaining run/model/tool hooks
 - [ ] failure/cancellation cleanup semantics
 - [ ] extension lifecycle observability
 - [ ] deterministic Agent integration tests
