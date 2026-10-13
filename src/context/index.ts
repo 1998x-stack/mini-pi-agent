@@ -17,6 +17,11 @@ export {
   type ApproximateTokenEstimatorOptions,
   type TokenEstimator
 } from "./estimator.js";
+export type { ContextPlanner } from "./planner.js";
+export {
+  KeepRecentContextPlanner,
+  type KeepRecentContextPlannerOptions
+} from "./policies/keep-recent.js";
 export {
   HeadTailToolResultReducer,
   resolveToolResultReductionOptions,
@@ -25,6 +30,12 @@ export {
   type ToolResultReduction,
   type ToolResultReductionOptions
 } from "./tool-result-reducer.js";
+export type {
+  ContextPlannerInput,
+  ContextProvenance,
+  PreparedContext,
+  ToolResultReductionProvenance
+} from "./types.js";
 export {
   buildContextUnits,
   flattenContextUnits,
