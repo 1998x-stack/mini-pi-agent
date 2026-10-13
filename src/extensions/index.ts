@@ -8,10 +8,7 @@ export {
   InvalidHookRegistrationError,
   UnknownExtensionError
 } from "./errors.js";
-export {
-  type ExtensionAPI,
-  ScopedExtensionAPI
-} from "./api.js";
+export type { ExtensionAPI } from "./api.js";
 export {
   type AfterModelEvent,
   type AfterRunEvent,
@@ -42,7 +39,6 @@ export {
   type ExtensionHostOptions
 } from "./host.js";
 export { HookPipeline } from "./pipeline.js";
-export { ExtensionRegistrationSet } from "./registrations.js";
 export {
   cloneLoadedExtension,
   type ExtensionDefinition,
