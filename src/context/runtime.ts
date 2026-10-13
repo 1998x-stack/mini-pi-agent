@@ -8,6 +8,11 @@ import type {
 } from "./policies/progressive-summary.js";
 import type { SummaryStore } from "./summary-store.js";
 import { cloneContextSummary, type ContextSummary } from "./summary.js";
+import {
+  normalizeContextSupplements,
+  renderContextSupplements,
+  type ContextSupplement
+} from "./supplements.js";
 import type { PreparedContext } from "./types.js";
 
 export interface ContextRuntimeOptions {
@@ -21,6 +26,7 @@ export interface ContextRuntimeOptions {
 export interface ContextRuntimePrepareInput {
   systemPrompt: string;
   history: readonly AgentMessage[];
+  supplements?: readonly ContextSupplement[];
   signal: AbortSignal;
 }
 
@@ -38,6 +44,7 @@ export interface ContextRuntimeResult {
   prepared: PreparedContext;
   durableTailStartMessageIndex: number;
   summaryAdvances: SummaryAdvanceProvenance[];
+  supplementIds: string[];
   summary?: ContextSummary;
 }
 
@@ -93,9 +100,9 @@ function withSummaryCompaction(
 /**
  * Orchestrates model-context preparation without owning durable history.
  *
- * The runtime may advance a summary checkpoint when KeepRecent-style planning
- * omits older unsummarized units, then re-plan against the shorter durable tail.
- * It never mutates `history` and never writes SessionStore entries.
+ * Summary checkpoints and generic context supplements are rendered into system
+ * material before planner budgeting. The runtime never appends either artifact
+ * to durable AgentMessage history.
  */
 export class ContextRuntime {
   private readonly planner: ContextPlanner;
@@ -120,6 +127,8 @@ export class ContextRuntime {
   async prepare(input: ContextRuntimePrepareInput): Promise<ContextRuntimeResult> {
     throwIfAborted(input.signal);
 
+    const supplements = normalizeContextSupplements(input.supplements ?? []);
+    const supplementIds = supplements.map((supplement) => supplement.id);
     let summary = this.summaryStore ? await this.summaryStore.getLatest() : undefined;
     const summaryAdvances: SummaryAdvanceProvenance[] = [];
 
@@ -134,7 +143,8 @@ export class ContextRuntime {
       }
 
       const durableTail = input.history.slice(tailStart);
-      const systemPrompt = renderSummarySystemPrompt(input.systemPrompt, summary);
+      const summarySystemPrompt = renderSummarySystemPrompt(input.systemPrompt, summary);
+      const systemPrompt = renderContextSupplements(summarySystemPrompt, supplements);
       const prepared = await this.planner.prepare({
         systemPrompt,
         history: durableTail,
@@ -149,6 +159,7 @@ export class ContextRuntime {
           prepared: withSummaryCompaction(prepared, summary),
           durableTailStartMessageIndex: tailStart,
           summaryAdvances,
+          supplementIds,
           ...(summary ? { summary: cloneContextSummary(summary) } : {})
         };
       }
