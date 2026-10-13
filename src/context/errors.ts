@@ -19,3 +19,5 @@ export class ContextBudgetExceededError extends ContextError {
 }
 
 export class InvalidContextHistoryError extends ContextError {}
+
+export class InvalidToolResultReductionOptionsError extends ContextError {}
