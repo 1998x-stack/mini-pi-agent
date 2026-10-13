@@ -58,12 +58,6 @@ src/context/units.ts
 tests/context-units.test.ts
 ```
 
-Additional error:
-
-```text
-InvalidContextHistoryError
-```
-
 ### Data model
 
 ```ts
@@ -83,122 +77,112 @@ matching ToolResultMessage(s)
 
 ### Implemented semantics
 
-Valid complete exchange:
-
-```text
-Assistant(call_a, call_b)
-ToolResult(call_b)
-ToolResult(call_a)
-
-→ one ToolExchangeContextUnit
-→ complete = true
-```
-
-Valid trailing in-progress exchange:
-
-```text
-Assistant(call_a, call_b)
-ToolResult(call_a)
-<end history>
-
-→ complete = false
-→ missingToolCallIds = [call_b]
-```
-
-Invalid history:
-
-- orphan tool result;
-- unknown tool-call id inside an open exchange;
-- duplicate tool-call id;
-- duplicate result;
-- mismatched `toolName`;
-- user/assistant message before an exchange completes.
+- complete exchanges are one causal unit;
+- tool results may arrive in a different order from declaration;
+- trailing partial exchanges are represented explicitly with `complete=false`;
+- orphan, duplicate, mismatched, or interleaved tool history is rejected;
+- `flattenContextUnits(buildContextUnits(history))` reproduces valid durable history.
 
 ### Core invariant
 
 > Context selection must never split a complete tool exchange merely because a raw-message boundary crosses it.
 
-### Round trip
-
-For valid history:
-
-```text
-flattenContextUnits(buildContextUnits(history))
-==
-history
-```
-
-### Verification
-
-- strict TypeScript source checking passed;
-- test source passed TypeScript checking with a temporary Vitest type shim;
-- runtime smoke verified trailing partial exchange metadata;
-- runtime smoke verified interleaved non-tool history is rejected.
-
-The full Vitest suite is not claimed as run in the current environment.
-
 ---
 
-## v0.3.3 — ToolResultReducer ← next
+## v0.3.3 — ToolResultReducer ✅ implemented
 
 ### Goal
 
 Reduce oversized environment observations only in model-visible context while preserving durable source messages unchanged.
 
-### Add
+### Implemented
 
 ```text
 src/context/tool-result-reducer.ts
+src/context/errors.ts
+src/context/index.ts
+
 tests/tool-result-reducer.test.ts
 ```
 
-### Reference policy
+### Public contracts
 
-Use explicit deterministic head/tail reduction:
+```ts
+interface ToolResultReducer {
+  reduce(message: ToolResultMessage): ToolResultReduction;
+}
+
+interface ToolResultReduction {
+  message: ToolResultMessage;
+  reduced: boolean;
+  originalChars: number;
+  visibleChars: number;
+  keptHeadChars: number;
+  keptTailChars: number;
+  omittedChars: number;
+}
+```
+
+Reference implementation:
+
+```ts
+class HeadTailToolResultReducer implements ToolResultReducer
+```
+
+Default policy:
 
 ```text
-[tool result reduced for model context]
+thresholdChars = 20_000
+headChars      =  8_000
+tailChars      =  8_000
+```
+
+### Reduction shape
+
+```text
+[mini-pi-agent tool result reduced for model context]
+tool_call_id=...
+tool_name=...
 original_chars=...
 kept_head_chars=...
 kept_tail_chars=...
+omitted_chars=...
 
 --- head ---
 ...
---- omitted ---
-...
+--- omitted N chars ---
 --- tail ---
 ...
 ```
 
-### Required contracts
-
-Likely shape:
-
-```ts
-interface ToolResultReducer {
-  reduce(message: ToolResultMessage): ToolResultMessage;
-}
-```
-
-The implementation may use an options object for thresholds and head/tail sizes.
-
 ### Invariants
 
 - original durable message is never mutated;
-- small results are returned unchanged or semantically identical;
+- small results remain semantically unchanged;
 - reduction is explicit, never silent;
 - reduction is deterministic;
-- `toolCallId`, `toolName`, `isError`, and timestamp identity remain intact;
-- reduced content remains traceable to original size;
+- `toolCallId`, `toolName`, `isError`, and timestamp remain intact;
+- character counting/slicing uses Unicode code points;
+- invalid reducer configuration throws `InvalidToolResultReductionOptionsError`;
+- if provenance overhead would make the candidate projection larger than the source, the reducer leaves the message unreduced;
 - no AgentLoop integration yet.
+
+### Verification
+
+- strict TypeScript source checking passed;
+- runtime smoke verified source immutability;
+- runtime smoke verified Unicode-safe head/tail slicing;
+- runtime smoke verified explicit omitted-character accounting.
+
+The full Vitest suite is not claimed as run in the current environment.
 
 ---
 
-## v0.3.4 — PreparedContext + KeepRecentPlanner
+## v0.3.4 — PreparedContext + KeepRecentPlanner ← next
 
 ### Goal
 
-Create the first planner that produces provider-facing context under a budget.
+Create the first planner that produces provider-facing context under a resolved budget.
 
 ### Add
 
@@ -213,6 +197,13 @@ tests/context-planner.test.ts
 ### Target API
 
 ```ts
+interface ContextProvenance {
+  originalMessageCount: number;
+  selectedUnitCount: number;
+  omittedUnitCount: number;
+  reducedToolResultCount: number;
+}
+
 interface PreparedContext {
   systemPrompt: string;
   messages: AgentMessage[];
@@ -221,26 +212,52 @@ interface PreparedContext {
   provenance: ContextProvenance;
 }
 
+interface ContextPlannerInput {
+  systemPrompt: string;
+  history: readonly AgentMessage[];
+  budget: ContextBudget;
+  signal: AbortSignal;
+}
+
 interface ContextPlanner {
   prepare(input: ContextPlannerInput): Promise<PreparedContext>;
 }
 ```
 
-### Policy
+### First policy
 
-- build causal context units;
-- start from newest complete units;
-- walk backward until the resolved input budget is filled;
-- use ToolResultReducer for oversized observations;
-- do not summarize yet.
+```text
+history
+  ↓
+buildContextUnits()
+  ↓
+reduce oversized tool results in model-only copies
+  ↓
+start from newest complete unit
+  ↓
+walk backward while budget fits
+  ↓
+flatten selected units
+  ↓
+PreparedContext
+```
+
+No summaries yet.
+
+### Key design question
+
+An incomplete trailing tool exchange represents active/recoverable runtime state. The planner must define whether it is always retained, rejected, or retained only under a dedicated policy. This must be explicit rather than accidental.
 
 ### Invariants
 
-- prepared context fits budget;
+- prepared context fits the resolved input budget;
 - system prompt is never silently truncated;
 - complete causal unit boundaries are preserved;
 - durable history is never mutated;
-- provenance explains selection/reduction/omission.
+- reduction affects only model-visible copies;
+- selection order remains chronological after walking backward;
+- provenance explains selection, omission, and reduction;
+- impossible budgets fail explicitly rather than silently dropping required context.
 
 ---
 
@@ -357,7 +374,7 @@ tests/agent-context-integration.test.ts
 
 - [x] budget and estimator primitives
 - [x] causal context units
-- [ ] explicit tool-result reduction
+- [x] explicit tool-result reduction
 - [ ] budgeted planner
 - [ ] summary checkpoints
 - [ ] progressive compaction
