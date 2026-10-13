@@ -30,143 +30,31 @@ and deterministic `SkillRegistry` identity/order semantics.
 
 ## v0.4.3 — SkillLoader + root/path validation ✅ implemented
 
-### Goal
-
-Load exactly one selected Skill body while preserving package-root safety and descriptor identity.
-
-### Implemented
-
-```text
-src/skills/loader.ts
-src/skills/paths.ts
-src/skills/types.ts
-src/skills/errors.ts
-src/skills/index.ts
-
-tests/skill-loader.test.ts
-tests/skill-paths.test.ts
-```
-
-### Contracts
-
-```ts
-interface LoadedSkill {
-  descriptor: SkillDescriptor;
-  instructions: string;
-}
-
-interface SkillLoader {
-  load(descriptor: SkillDescriptor, signal: AbortSignal): Promise<LoadedSkill>;
-}
-
-class FilesystemSkillLoader implements SkillLoader
-```
-
-### Pure lexical path checks
-
-`validateSkillDescriptorPaths()` requires:
-
-```text
-root is absolute
-manifestPath is absolute
-manifestPath is inside root
-manifestPath is exactly root/SKILL.md
-```
-
-`isPathWithinRoot()` distinguishes true `..` parent traversal from legal names that merely begin with `..`.
-
-### Filesystem/canonical checks
-
-`FilesystemSkillLoader` additionally requires:
-
-```text
-lstat(root)      → real directory, not symlink
-lstat(SKILL.md)  → real regular file, not symlink
-realpath(manifest) remains within realpath(root)
-canonical manifest == canonical root/SKILL.md
-```
-
-This keeps symlink/path behavior explicit instead of trusting path strings alone.
-
-### Identity rule
-
-After loading and parsing, normalized manifest identity must equal the selected descriptor identity:
-
-```text
-normalizeSkillName(parsed.manifest.name)
-==
-normalizeSkillName(descriptor.name)
-```
-
-Failure throws:
-
-```text
-SkillIdentityMismatchError
-```
-
-Path/file-type violations throw:
-
-```text
-SkillPathError
-```
-
-### Progressive-disclosure boundary
-
-The loader reads only the requested `SKILL.md`.
-
-It does not traverse or execute:
-
-```text
-references/
-scripts/
-assets/
-```
-
-A broken resource below `references/` therefore cannot break normal Skill body loading unless the model later explicitly asks an ordinary file tool to read it.
-
-### Immutability/cancellation
-
-- input descriptor remains unchanged;
-- returned descriptor is cloned, including metadata;
-- `AbortSignal` is checked before and between filesystem phases;
-- pre-aborted signals preserve the original abort reason.
-
-### Verification performed
-
-Strict TypeScript source-subset compilation passed under:
-
-```text
-strict
-noUncheckedIndexedAccess
-exactOptionalPropertyTypes
-```
-
-Runtime filesystem smoke verified normal load, broken-reference non-traversal, descriptor cloning, identity-drift rejection, symlink-root rejection, symlink-manifest rejection, and cancellation propagation.
-
-The full repository Vitest suite is not claimed as run in the current execution environment.
+Implemented safe on-demand loading of exactly one selected `SKILL.md`, including lexical and canonical path checks, symlink rejection, identity-drift detection, descriptor cloning, and cancellation propagation.
 
 ---
 
-## v0.4.4 — Catalog renderer + context supplement seam ← next
+## v0.4.4 — Catalog renderer + context supplement seam ✅ implemented
 
 ### Goal
 
 Expose compact Skill availability and selected Skill bodies through the same budget-accounted v0.3 context path.
 
-### Add/update
+### Implemented
 
 ```text
 src/skills/catalog.ts
 src/context/supplements.ts
+src/context/errors.ts
 src/context/runtime.ts
-src/context/types.ts
 src/context/index.ts
+src/skills/index.ts
 
 tests/skill-catalog.test.ts
 tests/context-supplements.test.ts
 ```
 
-### Target model
+### Generic context contract
 
 ```ts
 interface ContextSupplement {
@@ -177,17 +65,95 @@ interface ContextSupplement {
 }
 ```
 
-### Required semantics
+Context helpers:
 
-- Skill catalog is deterministic and compact;
-- catalog contains descriptors only, never full Skill instructions;
-- supplements are model-only derived context, never durable `AgentMessage`s;
-- supplement text is included in token accounting before final provider context is accepted;
-- active Skill instructions are required context while active and cannot be silently dropped;
-- summary checkpoint behavior from v0.3 remains valid;
-- impossible supplement + history budgets fail explicitly rather than bypass planning.
+```ts
+normalizeContextSupplements()
+renderContextSupplements()
+```
 
-### Forbidden shortcut
+Validation requires:
+
+- non-empty, valid supplement ids;
+- unique ids;
+- supported kinds;
+- non-empty content;
+- deterministic ordering.
+
+Reference order:
+
+```text
+skill-catalog first
+active-skill bodies next, ordered by id
+```
+
+Invalid supplements fail with:
+
+```text
+InvalidContextSupplementError
+```
+
+### Skill catalog
+
+```ts
+renderSkillCatalog(descriptors)
+createSkillCatalogSupplement(descriptors)
+```
+
+The catalog renders only:
+
+```text
+name
+description
+```
+
+and deliberately omits:
+
+```text
+instructions
+metadata
+root
+manifestPath
+package resources
+```
+
+This is the Level-0 progressive-disclosure representation.
+
+### Active Skill supplement
+
+```ts
+createLoadedSkillSupplement(loadedSkill)
+```
+
+produces one required `active-skill` supplement containing the selected Skill's Level-1 instructions.
+
+`skillSupplementId(name)` provides deterministic valid ids. Safe normalized names remain readable; names containing spaces or non-ASCII characters use collision-safe UTF-8 hex encoding.
+
+### ContextRuntime integration
+
+`ContextRuntimePrepareInput` now accepts:
+
+```ts
+supplements?: readonly ContextSupplement[];
+```
+
+Runtime composition is:
+
+```text
+base system prompt
+      ↓
+summary checkpoint
+      ↓
+context supplements
+      ↓
+ContextPlanner.prepare()
+      ↓
+final budget validation
+```
+
+This ordering is the central v0.4.4 invariant.
+
+Forbidden:
 
 ```text
 planner.prepare(...)
@@ -200,18 +166,144 @@ append Skill text afterwards   ❌
 Required:
 
 ```text
-Skill supplements
+Skill material
       ↓
-budget-aware context construction
+ContextSupplement[]
+      ↓
+planner-visible system material
+      ↓
+budget accounting
       ↓
 PreparedContext
 ```
 
+### Current required semantics
+
+The v0.4.4 reference runtime does not silently drop any supplied supplement. Catalog and active bodies are therefore mandatory once supplied.
+
+The `required` field remains explicit policy metadata for future selection/degradation policies; it is not yet used to remove supplements.
+
+If supplement material makes the system prompt exceed budget:
+
+```text
+ContextBudgetExceededError
+```
+
+is raised explicitly.
+
+### Durable-history invariant
+
+```text
+ContextSupplement
+!=
+AgentMessage
+```
+
+Supplements and summary checkpoints are model-only derived context. They are never appended to durable history.
+
+### Verification performed
+
+Strict TypeScript source-subset compilation passed under:
+
+```text
+strict
+noUncheckedIndexedAccess
+exactOptionalPropertyTypes
+```
+
+Runtime smoke verified:
+
+```text
+catalog + active Skill + stored summary
+→ rendered once into system context
+→ all included in estimator/planner budget
+→ only post-summary durable tail remains as messages
+→ durable history unchanged
+
+oversized active supplement
+→ ContextBudgetExceededError
+```
+
+The full repository Vitest suite is not claimed as run in the current execution environment.
+
 ---
 
-## v0.4.5 — Run-scoped activation + load_skill adapter
+## v0.4.5 — Run-scoped activation + load_skill adapter ← next
 
-Add `ActiveSkillStore`, shared activation service, and a small `load_skill(name)` Tool adapter. Activation must be idempotent and the tool result must acknowledge activation without duplicating the full body.
+### Goal
+
+Allow model-driven Skill activation while reusing the existing ToolCall → ToolResult feedback loop.
+
+### Add
+
+```text
+src/skills/active-store.ts
+src/skills/activation-service.ts
+src/skills/load-skill-tool.ts
+src/skills/errors.ts
+src/skills/index.ts
+
+tests/skill-activation.test.ts
+tests/load-skill-tool.test.ts
+```
+
+### Target contracts
+
+```ts
+interface ActiveSkillStore {
+  list(): readonly LoadedSkill[];
+  get(name: string): LoadedSkill | undefined;
+  activate(skill: LoadedSkill): void;
+  clear(): void;
+}
+```
+
+Reference behavior is run-scoped and idempotent by normalized Skill name.
+
+Activation service flow:
+
+```text
+requested name
+      ↓
+SkillRegistry.get()
+      ↓
+SkillLoader.load()
+      ↓
+ActiveSkillStore.activate()
+      ↓
+activation result
+```
+
+Unknown Skill names must fail through a typed error rather than returning `undefined` deep inside tool execution.
+
+### load_skill adapter
+
+Expose a small ordinary Tool:
+
+```text
+load_skill(name)
+```
+
+The adapter reuses the existing agent action/observation loop.
+
+Its ToolResult must remain compact, for example:
+
+```text
+Skill 'code-review' activated.
+```
+
+It must **not** return the full Skill instructions because those instructions are already supplied on the next model turn through `ContextSupplement`.
+
+### Must prove
+
+- activation is normalized-name idempotent;
+- repeated activation does not re-load or duplicate active state;
+- unknown names fail explicitly;
+- activation preserves cancellation;
+- store returns clones rather than shared mutable LoadedSkill state;
+- `load_skill` ToolResult is compact and contains no full body;
+- active Skill instructions can be converted into supplements for the next context preparation;
+- no SessionStore or Agent integration yet beyond ordinary tool semantics.
 
 ---
 
@@ -233,8 +325,8 @@ Prove end-to-end progressive disclosure, update package/runtime version to `0.4.
 - [x] descriptor/discovery contracts
 - [x] deterministic SkillRegistry
 - [x] safe on-demand SkillLoader
-- [ ] compact catalog renderer
-- [ ] context supplement budget integration
+- [x] compact catalog renderer
+- [x] context supplement budget integration
 - [ ] run-scoped ActiveSkillStore
 - [ ] shared activation service
 - [ ] `load_skill` adapter
