@@ -1,3 +1,4 @@
+import type { Dirent, Stats } from "node:fs";
 import { lstat, readdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { parseSkillDocument } from "./manifest-parser.js";
@@ -16,10 +17,6 @@ function compareText(left: string, right: string): number {
   if (left < right) return -1;
   if (left > right) return 1;
   return 0;
-}
-
-function cloneMetadata(metadata: Record<string, string> | undefined): Record<string, string> | undefined {
-  return metadata ? { ...metadata } : undefined;
 }
 
 /**
@@ -41,7 +38,7 @@ export class ProjectSkillSource implements SkillSource {
     context.signal.throwIfAborted();
     const catalogRoot = resolve(context.cwd, this.relativeRoot);
 
-    let entries;
+    let entries: Dirent[];
     try {
       entries = await readdir(catalogRoot, { withFileTypes: true });
     } catch (error) {
@@ -61,7 +58,7 @@ export class ProjectSkillSource implements SkillSource {
       const root = join(catalogRoot, entry.name);
       const manifestPath = join(root, "SKILL.md");
 
-      let manifestStat;
+      let manifestStat: Stats;
       try {
         manifestStat = await lstat(manifestPath);
       } catch (error) {
@@ -76,15 +73,16 @@ export class ProjectSkillSource implements SkillSource {
         signal: context.signal
       });
       const parsed = parseSkillDocument(source);
+      const metadata = parsed.manifest.metadata
+        ? { ...parsed.manifest.metadata }
+        : undefined;
 
       descriptors.push({
         name: parsed.manifest.name,
         description: parsed.manifest.description,
         root,
         manifestPath,
-        ...(parsed.manifest.metadata
-          ? { metadata: cloneMetadata(parsed.manifest.metadata) }
-          : {})
+        ...(metadata ? { metadata } : {})
       });
     }
 
