@@ -22,6 +22,7 @@ export type {
 } from "./core/types.js";
 export * from "./core/errors.js";
 export * from "./context/index.js";
+export * from "./extensions/index.js";
 export { ScriptedLLM } from "./llm/scripted.js";
 export { OpenAICompatibleLLM, type OpenAICompatibleOptions } from "./llm/openai-compatible.js";
 export type { LLMProvider, LLMRequest, LLMStreamEvent, ScriptedAssistantStep } from "./llm/types.js";
