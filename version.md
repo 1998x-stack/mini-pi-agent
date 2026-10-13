@@ -31,12 +31,18 @@ Durable AgentMessage[] history
           │
           └── old-history prefix
                   ↓
+          ProgressiveSummaryPolicy
+                  │
+                  ├── previous ContextSummary
+                  ├── newly covered messages only
+                  └── ContextSummarizer
+                  ↓
              ContextSummary
                   ↓
              SummaryStore
 ```
 
-Three concepts must remain different:
+Three concepts remain distinct:
 
 ```text
 Durable History
@@ -54,11 +60,13 @@ A summary is not permission to delete history.
 
 ### v0.3.1 — ContextBudget + ApproximateTokenEstimator ✅
 
+Context capacity is explicit:
+
 ```text
 inputBudget = contextWindow - outputReserve - safetyMargin
 ```
 
-Context capacity is explicit and token estimation is a replaceable interface.
+Token estimation is a replaceable interface.
 
 ### v0.3.2 — ContextUnitBuilder + ToolExchange atomicity ✅
 
@@ -70,7 +78,7 @@ matching ToolResultMessage[]
 ToolExchangeContextUnit
 ```
 
-Complete tool exchanges are causal units and cannot be silently split by context selection.
+Complete tool exchanges are causal units and cannot be silently split by context selection or summary coverage.
 
 ### v0.3.3 — ToolResultReducer ✅
 
@@ -102,19 +110,7 @@ The planner exposes selection/reduction provenance and does not mutate history, 
 
 ### v0.3.5 — ContextSummary + SummaryStore ✅
 
-Implemented:
-
-```text
-src/context/summary.ts
-src/context/summary-store.ts
-src/context/errors.ts
-src/context/index.ts
-
-tests/context-summary.test.ts
-tests/summary-store.test.ts
-```
-
-Public checkpoint model:
+Checkpoint model:
 
 ```ts
 interface ContextSummary {
@@ -126,7 +122,7 @@ interface ContextSummary {
 }
 ```
 
-Coverage is defined as a durable-history prefix:
+Coverage means:
 
 ```text
 coversThroughMessageIndex = N
@@ -134,36 +130,89 @@ coversThroughMessageIndex = N
 summary covers history[0..N]
 ```
 
-This prefix rule is essential for progressive compaction because the next summarization step can unambiguously start at `N + 1`.
+`InMemorySummaryStore` stores checkpoint artifacts separately from `AgentMessage[]`, clones on read/write, allows equal or forward coverage, and rejects regression.
 
-Reference store:
+### v0.3.6 — ProgressiveSummaryPolicy + ContextSummarizer ✅
 
-```ts
-interface SummaryStore {
-  getLatest(): Promise<ContextSummary | undefined>;
-  put(summary: ContextSummary): Promise<void>;
-  clear(): Promise<void>;
-}
-
-class InMemorySummaryStore implements SummaryStore
-```
-
-Store invariants:
-
-- summaries are stored separately from `AgentMessage[]`;
-- reads/writes use copies rather than shared object identity;
-- equal coverage may replace a checkpoint, supporting deterministic regeneration/retry;
-- forward coverage is accepted;
-- backward coverage is rejected through `SummaryCoverageRegressionError`;
-- a rejected regression leaves the previous checkpoint intact.
-
-Validation error:
+Implemented:
 
 ```text
-InvalidContextSummaryError
+src/context/summarizer.ts
+src/context/policies/progressive-summary.ts
+src/context/errors.ts
+src/context/index.ts
+
+tests/context-summarizer.test.ts
+tests/progressive-compaction.test.ts
+tests/context-cancellation.test.ts
 ```
 
-The summary artifact itself is deliberately model-agnostic in v0.3.5. No LLM is called yet.
+Summarizer contract:
+
+```ts
+interface ContextSummarizer {
+  summarize(input: ContextSummarizerInput): Promise<ContextSummarizerResult>;
+}
+```
+
+Reference offline implementation:
+
+```ts
+DeterministicContextSummarizer
+```
+
+Progressive update model:
+
+```text
+history[0..100]
+      ↓
+     S1
+
+S1 + history[101..170]
+      ↓
+     S2
+
+S2 + history[171..240]
+      ↓
+     S3
+```
+
+The policy passes only history after the previous checkpoint boundary as new input. The previous checkpoint is supplied separately.
+
+Coverage boundary invariant:
+
+> Every checkpoint boundary must equal the end of a complete `ContextUnit`.
+
+Therefore summary coverage cannot cut through an assistant/tool-result exchange, and an incomplete trailing exchange cannot be checkpointed.
+
+Failure atomicity:
+
+```text
+generate candidate
+      ↓
+validate + estimate
+      ↓
+abort check
+      ↓
+SummaryStore.put()
+```
+
+If generation fails or cancellation occurs before the commit, the latest checkpoint remains unchanged.
+
+Same-boundary requests are explicit no-ops and do not invoke the summarizer.
+
+New errors:
+
+```text
+InvalidSummaryCoverageBoundaryError
+SummaryGenerationError
+```
+
+Coverage regression continues to use:
+
+```text
+SummaryCoverageRegressionError
+```
 
 ---
 
@@ -216,6 +265,16 @@ summaryCoversMessageIndex()
 SummaryStore
 InMemorySummaryStore
 
+Progressive summarization
+────────────────────────
+ContextSummarizer
+ContextSummarizerInput
+ContextSummarizerResult
+DeterministicContextSummarizer
+ProgressiveSummaryPolicy
+AdvanceSummaryInput
+ProgressiveSummaryResult
+
 Errors
 ────────────────────────
 ContextError
@@ -225,13 +284,15 @@ InvalidContextHistoryError
 InvalidToolResultReductionOptionsError
 InvalidContextSummaryError
 SummaryCoverageRegressionError
+InvalidSummaryCoverageBoundaryError
+SummaryGenerationError
 ```
 
 ---
 
-## 5. v0.3.5 verification
+## 5. v0.3.6 verification
 
-The v0.3.5 source subset passed TypeScript checking with:
+The new source subset passed TypeScript checking with:
 
 ```text
 strict
@@ -242,16 +303,20 @@ exactOptionalPropertyTypes
 Runtime smoke verified:
 
 ```text
-put S1 covering 0..2
-put S2 covering 0..5
-→ latest = S2
+advance history 0..1
+→ S1 covers 0..1
 
-attempt S_bad covering 0..4
-→ SummaryCoverageRegressionError
-→ latest remains S2
+advance to 3
+→ summarizer receives previous S1
+→ new messages are only 2..3
+→ S2 covers 0..3
+
+abort after summarizer returns but before commit
+→ abort propagated
+→ SummaryStore still contains S2
 ```
 
-The full repository Vitest suite is not claimed as run in the current execution environment because repository dependencies could not be installed there.
+The full repository Vitest suite is not claimed as run because the execution environment could not resolve GitHub/install repository dependencies.
 
 ---
 
@@ -263,8 +328,8 @@ v0.3.2  ContextUnitBuilder + ToolExchange atomicity      ✅
 v0.3.3  ToolResultReducer                                ✅
 v0.3.4  PreparedContext + KeepRecentPlanner              ✅
 v0.3.5  ContextSummary + SummaryStore                    ✅
-v0.3.6  ProgressiveSummaryPolicy + ContextSummarizer     ← next
-v0.3.7  AgentLoop integration + events + examples
+v0.3.6  ProgressiveSummaryPolicy + ContextSummarizer     ✅
+v0.3.7  AgentLoop integration + events + examples        ← next
 ```
 
 The sequence is intentional:
@@ -300,38 +365,31 @@ Still outside v0.3:
 - vector-database memory platform
 - semantic retrieval as a substitute for correct context lifecycle
 
-Still outside v0.3.5 specifically:
+Still outside v0.3.6 specifically:
 
-- calling an LLM to generate summaries;
-- injecting summaries into PreparedContext;
-- progressive summarization policy;
-- AgentLoop integration.
+- automatic AgentLoop-triggered summarization;
+- inserting summary checkpoints into provider-facing context;
+- model-provider-specific summarizer implementations;
+- deleting durable history after summary creation.
 
 ---
 
-## 8. Next increment — v0.3.6
+## 8. Next increment — v0.3.7
 
-The next problem is:
-
-```text
-We can store one explicit summary checkpoint.
-How do we advance it without repeatedly summarizing all old history?
-```
-
-Target progression:
+The remaining v0.3 problem is runtime integration:
 
 ```text
-history[0..100]
-      ↓
-     S1
-
-S1 + history[101..170]
-      ↓
-     S2
-
-S2 + history[171..240]
-      ↓
-     S3
+Agent state.messages
+      │
+      ├────────────► SessionStore / durable truth
+      │
+      └── ContextPlanner.prepare()
+                 ↓
+      summary-aware PreparedContext
+                 ↓
+             LLMProvider
 ```
 
-v0.3.6 will introduce `ContextSummarizer` and `ProgressiveSummaryPolicy`, with cancellation, no-op, failure-atomicity, and coverage-monotonicity tests.
+v0.3.7 must integrate the subsystem without making `AgentLoop` own compaction policy details.
+
+It must also add context lifecycle events, deterministic integration tests, an educational long-history example, package/version finalization, and then freeze `v0.3` only after those checks are complete.
