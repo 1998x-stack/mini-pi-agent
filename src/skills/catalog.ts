@@ -3,6 +3,7 @@ import { normalizeSkillName } from "./registry.js";
 import type { LoadedSkill, SkillDescriptor } from "./types.js";
 
 export const SKILL_CATALOG_SUPPLEMENT_ID = "skills:catalog";
+const SAFE_ID_NAME = /^[a-z0-9._-]+$/;
 
 function compareDescriptor(left: SkillDescriptor, right: SkillDescriptor): number {
   const leftName = normalizeSkillName(left.name);
@@ -12,6 +13,18 @@ function compareDescriptor(left: SkillDescriptor, right: SkillDescriptor): numbe
   if (left.manifestPath < right.manifestPath) return -1;
   if (left.manifestPath > right.manifestPath) return 1;
   return 0;
+}
+
+function utf8Hex(value: string): string {
+  return Array.from(new TextEncoder().encode(value), (byte) =>
+    byte.toString(16).padStart(2, "0")
+  ).join("");
+}
+
+export function skillSupplementId(name: string): string {
+  const normalizedName = normalizeSkillName(name);
+  if (SAFE_ID_NAME.test(normalizedName)) return `skill:name:${normalizedName}`;
+  return `skill:utf8hex:${utf8Hex(normalizedName)}`;
 }
 
 /**
@@ -44,11 +57,10 @@ export function createSkillCatalogSupplement(
 }
 
 export function createLoadedSkillSupplement(loaded: LoadedSkill): ContextSupplement {
-  const normalizedName = normalizeSkillName(loaded.descriptor.name);
   const nameLiteral = JSON.stringify(loaded.descriptor.name);
 
   return {
-    id: `skill:${normalizedName}`,
+    id: skillSupplementId(loaded.descriptor.name),
     kind: "active-skill",
     content: [
       `<active_skill name=${nameLiteral}>`,
