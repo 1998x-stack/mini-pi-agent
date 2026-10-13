@@ -9,7 +9,9 @@ export {
   ContextError,
   InvalidContextBudgetError,
   InvalidContextHistoryError,
-  InvalidToolResultReductionOptionsError
+  InvalidContextSummaryError,
+  InvalidToolResultReductionOptionsError,
+  SummaryCoverageRegressionError
 } from "./errors.js";
 export {
   ApproximateTokenEstimator,
@@ -22,6 +24,19 @@ export {
   KeepRecentContextPlanner,
   type KeepRecentContextPlannerOptions
 } from "./policies/keep-recent.js";
+export {
+  InMemorySummaryStore,
+  type SummaryStore
+} from "./summary-store.js";
+export {
+  assertValidContextSummary,
+  cloneContextSummary,
+  createContextSummary,
+  summaryCoveredMessageCount,
+  summaryCoversMessageIndex,
+  type ContextSummary,
+  type ContextSummaryInput
+} from "./summary.js";
 export {
   HeadTailToolResultReducer,
   resolveToolResultReductionOptions,
