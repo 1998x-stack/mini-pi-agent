@@ -10,8 +10,10 @@ export {
   InvalidContextBudgetError,
   InvalidContextHistoryError,
   InvalidContextSummaryError,
+  InvalidSummaryCoverageBoundaryError,
   InvalidToolResultReductionOptionsError,
-  SummaryCoverageRegressionError
+  SummaryCoverageRegressionError,
+  SummaryGenerationError
 } from "./errors.js";
 export {
   ApproximateTokenEstimator,
@@ -25,6 +27,12 @@ export {
   type KeepRecentContextPlannerOptions
 } from "./policies/keep-recent.js";
 export {
+  ProgressiveSummaryPolicy,
+  type AdvanceSummaryInput,
+  type ProgressiveSummaryPolicyOptions,
+  type ProgressiveSummaryResult
+} from "./policies/progressive-summary.js";
+export {
   InMemorySummaryStore,
   type SummaryStore
 } from "./summary-store.js";
@@ -37,6 +45,13 @@ export {
   type ContextSummary,
   type ContextSummaryInput
 } from "./summary.js";
+export {
+  DeterministicContextSummarizer,
+  type ContextSummarizer,
+  type ContextSummarizerInput,
+  type ContextSummarizerResult,
+  type DeterministicContextSummarizerOptions
+} from "./summarizer.js";
 export {
   HeadTailToolResultReducer,
   resolveToolResultReductionOptions,
