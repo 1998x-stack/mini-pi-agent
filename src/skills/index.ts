@@ -5,6 +5,7 @@ export {
 } from "./active-store.js";
 export {
   SkillActivationService,
+  type SkillActivationRequestOptions,
   type SkillActivationResult,
   type SkillActivationServiceOptions,
   type SkillActivationStatus
@@ -26,10 +27,19 @@ export {
   UnknownSkillError
 } from "./errors.js";
 export {
+  SkillEventBus,
+  type SkillActivationEvent,
+  type SkillActivationEventListener,
+  type SkillActivationEventSink,
+  type SkillActivationOrigin,
+  type SkillEventMetadata
+} from "./events.js";
+export {
   FilesystemSkillLoader,
   type SkillLoader
 } from "./loader.js";
 export { LoadSkillTool } from "./load-skill-tool.js";
+export { ManualSkillActivator } from "./manual-activation.js";
 export { parseSkillDocument } from "./manifest-parser.js";
 export {
   isPathWithinRoot,
