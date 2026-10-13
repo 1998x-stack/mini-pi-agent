@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.5.1
+
+- Added the first Extensions runtime primitives: typed lifecycle hook contracts, `HookPipeline`, extension-owner metadata, disposables, and typed hook errors.
+- Defined the initial hook surface: `before_run`, `before_model`, `after_model`, `before_tool`, `after_tool`, `after_turn`, and `after_run`.
+- Added deterministic sequential registration-order execution with no numeric priority system.
+- Made handler event inputs mutation-isolated through cloning; runtime behavior changes only through explicit structured return values.
+- Added `before_tool` continue / replace-arguments / block semantics. Replacements chain into later handlers; block short-circuits later handlers and records blocking extension provenance.
+- Added constrained `after_tool` result-transform chaining and context-contribution aggregation for `before_run` / `before_model`.
+- Added `ExtensionHookError` with extension name, hook name, and original cause, plus `InvalidHookRegistrationError` for invalid owners.
+- Propagated original AbortSignal reasons before/after awaited handlers so cancellation is not misreported as an extension failure.
+- Added `tests/extension-hooks.test.ts` covering ordering, transform chaining, block short-circuiting, mutation isolation, after-tool chaining, context contribution order, disposal, cancellation, provenance, and invalid registration.
+- Strict TypeScript source-subset checking and HookPipeline runtime smoke passed; the full repository Vitest suite is not claimed as run in the current execution environment.
+
 ## v0.4.7 / 0.4.0
 
 - Added `SkillRuntime` as the Agent-lifetime Skills composition root for discovery, registry, activation, events, `load_skill`, and active context supplements.
