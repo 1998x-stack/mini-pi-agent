@@ -32,35 +32,53 @@ Inherited v0.3 invariant:
               │
               ▼
         SkillRegistry
-              │ selected descriptor
-              ▼
-    FilesystemSkillLoader
-              │
-              ▼
-          LoadedSkill
-              │
-       ┌──────┴─────────┐
-       ▼                ▼
-compact catalog     active body
-       │                │
-       └──────┬─────────┘
-              ▼
-      ContextSupplement[]
-              │
-              ▼
-        ContextRuntime
-              │
-     summary + supplements
-     rendered before planner
-              │
-              ▼
-     KeepRecentContextPlanner
-              │
-              ▼
-       PreparedContext
-              │
-              ▼
-          LLMProvider
+          │         │
+          │         └──────── compact catalog ───────┐
+          │ selected descriptor                      │
+          ▼                                          │
+    FilesystemSkillLoader                            │
+          │                                          │
+          ▼                                          │
+       LoadedSkill                                   │
+          │                                          │
+          ▼                                          │
+ SkillActivationService                              │
+          │                                          │
+          ▼                                          │
+ InMemoryActiveSkillStore                            │
+          │                                          │
+          └──────── active Skill supplements ─────────┘
+                             │
+                             ▼
+                     ContextSupplement[]
+                             │
+                             ▼
+                       ContextRuntime
+                             │
+                             ▼
+                      ContextPlanner
+                             │
+                             ▼
+                      PreparedContext
+                             │
+                             ▼
+                        LLMProvider
+```
+
+Model-driven activation reuses the ordinary tool loop through:
+
+```text
+LLM
+ ↓ tool_call
+load_skill(name)
+ ↓
+SkillActivationService
+ ↓
+ActiveSkillStore
+ ↓ compact ToolResult acknowledgement
+next model turn
+ ↓
+active-skill ContextSupplement
 ```
 
 The Agent Loop still contains no Skill-specific branch.
@@ -70,13 +88,9 @@ The Agent Loop still contains no Skill-specific branch.
 ## 3. Progressive disclosure state
 
 ```text
-Level 0 — descriptor catalog                         ✅
-name + description only in model catalog
-
-Level 1 — selected SKILL.md instructions             ✅ primitive + context supplement
-
+Level 0 — compact descriptor catalog                 ✅
+Level 1 — selected SKILL.md instructions             ✅
 Level 2 — optional references                        not auto-loaded
-
 Level 3 — scripts/assets/templates                   not auto-executed
 ```
 
@@ -86,7 +100,8 @@ Strict rules:
 discover != load
 load != activate
 activate != execute
-knowledge source != durable history
+Skill body != load_skill ToolResult
+ContextSupplement != AgentMessage
 ```
 
 ---
@@ -95,134 +110,124 @@ knowledge source != durable history
 
 ### v0.4.1 — Skill manifest parser + core types ✅
 
-Implemented deterministic parsing for the educational scalar-frontmatter `SKILL.md` subset.
+Deterministic parser for the educational scalar-frontmatter `SKILL.md` subset.
 
 ### v0.4.2 — ProjectSkillSource + SkillRegistry ✅
 
-Implemented one-level project discovery and deterministic descriptor identity/order semantics.
+Descriptor-only one-level project discovery plus deterministic normalized-name catalog semantics.
 
 ### v0.4.3 — SkillLoader + path/root validation ✅
 
-Implemented safe on-demand loading of exactly one selected `SKILL.md`, including lexical containment, real file/symlink checks, canonical `realpath` checks, identity-drift detection, descriptor cloning, and cancellation propagation.
+Safe on-demand loading of exactly one selected `SKILL.md`, including lexical/canonical containment, symlink rejection and identity-drift detection.
 
 ### v0.4.4 — Catalog renderer + context supplement seam ✅
+
+Compact descriptor catalogs and selected Skill bodies now enter model context through generic `ContextSupplement[]` before planner/token-budget validation. Supplements remain model-only derived context and never become durable conversation messages.
+
+### v0.4.5 — Run-scoped activation + `load_skill` adapter ✅
 
 Implemented:
 
 ```text
-src/skills/catalog.ts
-src/context/supplements.ts
-src/context/errors.ts
-src/context/runtime.ts
-src/context/index.ts
+src/skills/active-store.ts
+src/skills/activation-service.ts
+src/skills/load-skill-tool.ts
+src/skills/errors.ts
 src/skills/index.ts
 
-tests/skill-catalog.test.ts
-tests/context-supplements.test.ts
+tests/skill-activation.test.ts
+tests/load-skill-tool.test.ts
 ```
 
-Generic model-only context contract:
+Run-scoped active state:
 
 ```ts
-interface ContextSupplement {
-  id: string;
-  kind: "skill-catalog" | "active-skill";
-  content: string;
-  required: boolean;
+interface ActiveSkillStore {
+  list(): readonly LoadedSkill[];
+  get(name: string): LoadedSkill | undefined;
+  activate(skill: LoadedSkill): LoadedSkill;
+  clear(): void;
 }
+
+class InMemoryActiveSkillStore implements ActiveSkillStore
 ```
 
-Skill producers:
+Semantics:
+
+- active identity uses the same `trim + lowercase` rule as `SkillRegistry`;
+- activation is idempotent by normalized Skill name;
+- first active body wins for the current store lifetime;
+- `list()` is deterministic by normalized name;
+- construction/storage/read boundaries clone descriptors and metadata;
+- `clear()` explicitly ends the run-scoped active state.
+
+Shared activation service:
+
+```text
+requested name
+      ↓
+check ActiveSkillStore
+      ↓ not active
+SkillRegistry.get()
+      ↓
+SkillLoader.load()
+      ↓
+re-check ActiveSkillStore after async load
+      ↓
+ActiveSkillStore.activate()
+```
+
+The post-load re-check makes concurrent completion semantics consistent: if another activation committed while loading, the second result reports `already-active` rather than pretending to be the first activation.
+
+Unknown names fail through:
+
+```text
+UnknownSkillError
+```
+
+Direct invalid activation arguments fail through:
+
+```text
+InvalidSkillActivationError
+```
+
+Model activation adapter:
 
 ```ts
-renderSkillCatalog(descriptors)
-createSkillCatalogSupplement(descriptors)
-createLoadedSkillSupplement(loadedSkill)
-skillSupplementId(name)
+class LoadSkillTool implements Tool
 ```
 
-Catalog semantics:
+Tool contract:
 
 ```text
-SkillDescriptor[]
-      ↓ deterministic normalized-name order
-<available_skills>
-{"name":"code-review","description":"Review changes."}
-{"name":"release","description":"Prepare a release."}
-</available_skills>
+name: load_skill
+args: { name: string }
+additionalProperties: false
 ```
 
-The catalog deliberately excludes:
+Compact results:
 
 ```text
-instructions
-metadata
-root
-manifestPath
-references/scripts/assets
+Skill 'code-review' activated.
+
+Skill 'code-review' is already active.
 ```
 
-Active Skill semantics:
+The full Skill instructions are deliberately absent from this ToolResult. They remain in `ActiveSkillStore` and become model-visible on the next turn only through:
 
 ```text
-LoadedSkill
-   ↓
-required active-skill ContextSupplement
-   ↓
-full instructions for that selected Skill only
-```
-
-ContextRuntime now accepts:
-
-```ts
-interface ContextRuntimePrepareInput {
-  systemPrompt: string;
-  history: readonly AgentMessage[];
-  supplements?: readonly ContextSupplement[];
-  signal: AbortSignal;
-}
-```
-
-Composition order:
-
-```text
-base system prompt
+ActiveSkillStore.list()
       ↓
-summary checkpoint, if any
+createLoadedSkillSupplement()
       ↓
-normalized context supplements
-      ↓
-ContextPlanner.prepare()
-      ↓
-final budget validation
+ContextRuntime.prepare(... supplements ...)
 ```
 
-Therefore Skill material cannot bypass token accounting by being appended after planning.
+This prevents one large Skill body from being duplicated in both durable tool history and model-only active Skill context.
 
-The reference runtime currently treats every supplied supplement as mandatory model-visible system material. `required` is explicit policy metadata for later strategies; v0.4.4 does not silently drop optional or required supplements.
+### v0.4.5 verification
 
-Supplement identity/order semantics:
-
-- ids are validated and unique;
-- catalog renders before active Skill bodies;
-- active bodies are deterministically ordered by supplement id;
-- safe Skill names get readable ids such as `skill:name:code-review`;
-- other names use collision-safe UTF-8 hex ids;
-- invalid/duplicate supplements fail through `InvalidContextSupplementError`.
-
-Most importantly:
-
-```text
-ContextSupplement
-!=
-AgentMessage
-```
-
-Catalog, active instructions, and summary checkpoints are provider-context artifacts only. They are never appended to durable conversation history.
-
-### v0.4.4 verification
-
-The source subset passed TypeScript checking under:
+Strict TypeScript source-subset compilation passed under:
 
 ```text
 strict
@@ -233,15 +238,21 @@ exactOptionalPropertyTypes
 Runtime smoke verified:
 
 ```text
-Skill catalog + active Skill + existing summary
-→ all rendered once in model-only system context
-→ estimator/planner includes them in input budget
-→ provider-visible messages begin after summary coverage
-→ durable history remains unchanged
+20KB Skill body
+→ first load_skill activates it
+→ compact 30-character acknowledgement
+→ body absent from ToolResult
+→ body present in active-skill supplement
 
-oversized active Skill supplement
-→ ContextBudgetExceededError
-→ no post-planner bypass
+second normalized activation
+→ loader call count remains 1
+→ status = already-active
+
+store get/list
+→ cloned values
+
+clear()
+→ active catalog empty
 ```
 
 The full repository Vitest suite is not claimed as run in the current execution environment.
@@ -255,55 +266,27 @@ v0.4.1  Skill manifest parser + core types                   ✅
 v0.4.2  ProjectSkillSource + SkillRegistry                  ✅
 v0.4.3  SkillLoader + path/root validation                  ✅
 v0.4.4  compact catalog + context supplement seam           ✅
-v0.4.5  run-scoped activation + load_skill adapter          ← next
-v0.4.6  references + events + manual activation surface
+v0.4.5  run-scoped activation + load_skill adapter          ✅
+v0.4.6  references + events + manual activation surface     ← next
 v0.4.7  Agent integration + examples + 0.4.0 freeze
 ```
 
 ---
 
-## 6. Next increment — v0.4.5
+## 6. Next increment — v0.4.6
 
-The next problem is now:
+The next problem is lifecycle observability and a shared explicit activation surface.
 
-```text
-The runtime can discover Skills, safely load one,
-and budget catalog/active bodies.
-
-How does the model request activation during a run?
-```
-
-v0.4.5 introduces:
+v0.4.6 will establish:
 
 ```text
-ActiveSkillStore
-SkillActivationService
-load_skill Tool adapter
+Skill lifecycle events
+manual/explicit activation using the same SkillActivationService
+references remain ordinary read-tool inputs
+scripts remain ordinary shell/tool executions
 ```
 
-Target flow:
-
-```text
-compact catalog
-      ↓
-model calls load_skill(name)
-      ↓
-SkillActivationService
-      ↓
-SkillRegistry lookup
-      ↓
-SkillLoader.load()
-      ↓
-run-scoped ActiveSkillStore
-      ↓
-next ContextRuntime.prepare()
-      ↓
-active-skill supplement
-```
-
-Key invariant:
-
-> `load_skill` acknowledges activation with a compact ToolResult; it must not duplicate the entire Skill body inside durable tool history.
+No second hidden Skill execution channel will be introduced.
 
 ---
 
