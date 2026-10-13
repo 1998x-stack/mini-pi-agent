@@ -22,6 +22,12 @@ export interface SkillDescriptor {
   metadata?: Record<string, string>;
 }
 
+/** Full Level-1 representation created only for one explicitly selected Skill. */
+export interface LoadedSkill {
+  descriptor: SkillDescriptor;
+  instructions: string;
+}
+
 export interface SkillDiscoveryContext {
   cwd: string;
   signal: AbortSignal;
