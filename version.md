@@ -3,62 +3,82 @@
 ## Version identity
 
 - **Branch:** `v0.4`
-- **Base:** completed `v0.3`
-- **Current package:** `0.3.0` until final freeze
-- **Target package:** `0.4.0`
-- **Status:** active implementation snapshot
+- **Base snapshot:** completed `v0.3`
+- **Package/runtime version:** `0.4.0`
 - **Theme:** Skills + progressive disclosure
+- **Status:** **implemented historical learning snapshot**
 
-Primary invariant:
+Primary mental model:
 
-> A Skill changes model guidance, not runtime execution semantics.
+> **A Skill is discoverable workflow knowledge. It changes model guidance without changing runtime execution semantics.**
 
-## Current architecture
+Inherited v0.3 invariant:
 
-```text
-ProjectSkillSource
-  ↓
-SkillDescriptor[]
-  ↓
-SkillRegistry ─────────────→ compact catalog
-  ↓ selected
-FilesystemSkillLoader
-  ↓
-LoadedSkill
-  ↓
-SkillActivationService
-  ├─ load_skill Tool
-  └─ ManualSkillActivator
-  ↓
-ActiveSkillStore
-  ↓
-active-skill supplements
-  ↓
-ContextRuntime
-  ↓
-ContextPlanner
-  ↓
-PreparedContext
-```
+> **Available knowledge is not the same thing as model-visible context.**
 
-Lifecycle observation is metadata-only:
+---
+
+## Final architecture
 
 ```text
-skill_activation_start
-skill_activated
-skill_activation_reused
-skill_activation_failed
+<cwd>/.mini-pi/skills/*/SKILL.md
+              │
+              ▼
+      ProjectSkillSource
+              │
+              ▼
+      SkillDescriptor[]
+              │
+              ▼
+        SkillRegistry
+          │         │
+          │         └──── compact catalog ───────────┐
+          │ selected descriptor                      │
+          ▼                                          │
+    FilesystemSkillLoader                            │
+          │                                          │
+          ▼                                          │
+       LoadedSkill                                   │
+          │                                          │
+          ▼                                          │
+ SkillActivationService                              │
+      ┌───┴──────────────┐                           │
+      ▼                  ▼                           │
+ load_skill Tool   ManualSkillActivator              │
+      │                  │                           │
+      └───────┬──────────┘                           │
+              ▼                                      │
+      ActiveSkillStore                               │
+              │                                      │
+              └──── active Skill supplements ─────────┘
+                             │
+                             ▼
+                     ContextSupplement[]
+                             │
+                             ▼
+                       ContextRuntime
+                             │
+                             ▼
+                       ContextPlanner
+                             │
+                             ▼
+                      PreparedContext
+                             │
+                             ▼
+                        LLMProvider
 ```
 
-`SkillEventBus` listener failures are isolated from activation behavior.
+`AgentLoop` remains Skill-agnostic. Its only v0.4 addition is a generic `contextSupplements()` seam.
+
+---
 
 ## Progressive disclosure
 
 ```text
-Level 0  descriptor catalog                 ✅
-Level 1  selected SKILL.md instructions     ✅
-Level 2  references                         ordinary read-tool path only
-Level 3  scripts/assets                     ordinary execution/tool path only
+Level 0 — SkillDescriptor catalog                  ✅
+Level 1 — selected SKILL.md instructions           ✅
+Level 2 — references/* via ordinary file tools     ✅ boundary preserved
+Level 3 — scripts/assets via ordinary tools        ✅ boundary preserved
 ```
 
 Strict rules:
@@ -69,79 +89,162 @@ load != activate
 activate != execute
 Skill body != load_skill ToolResult
 ContextSupplement != AgentMessage
-manual activation == same SkillActivationService as load_skill
 ```
 
-## Completed increments
+---
+
+## Implemented increments
 
 ```text
 v0.4.1  manifest parser + core types                         ✅
 v0.4.2  ProjectSkillSource + SkillRegistry                  ✅
-v0.4.3  SkillLoader + path/root validation                  ✅
-v0.4.4  catalog + ContextSupplement budget integration      ✅
-v0.4.5  ActiveSkillStore + activation + load_skill          ✅
+v0.4.3  SkillLoader + path/root safety                      ✅
+v0.4.4  compact catalog + ContextSupplement budget seam     ✅
+v0.4.5  ActiveSkillStore + ActivationService + load_skill   ✅
 v0.4.6  references boundary + events + manual activation    ✅
-v0.4.7  Agent integration + examples + 0.4.0 freeze         ← next
+v0.4.7  Agent integration + examples + 0.4.0 freeze         ✅
 ```
 
-## v0.4.6 implemented
+---
 
-Added:
+## Agent run lifecycle
 
 ```text
-src/skills/events.ts
-src/skills/manual-activation.ts
-src/skills/activation-service.ts
-src/skills/load-skill-tool.ts
-src/skills/index.ts
+Agent.create()
+   ↓
+discover project Skills once
+   ↓
+build SkillRegistry
+   ↓
+register ordinary load_skill Tool
 
-tests/skill-events.test.ts
-examples/08-skill-manual-activation.ts
+Agent.prompt()
+   ↓
+clear ActiveSkillStore
+   ↓
+turn 1: catalog supplement only
+   ↓
+model may call load_skill(name)
+   ↓
+compact ToolResult enters durable history
+   ↓
+turn 2+: catalog + active Skill supplements
+   ↓
+run ends
+   ↓
+clear ActiveSkillStore
 ```
 
-### Event semantics
+Catalog/discovery state lives for the Agent lifetime. Active Skill bodies are strictly run-scoped.
 
-Events expose only activation metadata such as name, normalized identity, manifest path, origin, and compact error metadata. Full instructions are never emitted.
+---
 
-Origins are explicit:
+## Context invariant
 
-```text
-api
-manual
-tool
-```
-
-Observation is non-authoritative: a failing event listener cannot turn a successful activation into a failed one.
-
-### Manual activation
-
-`ManualSkillActivator` is intentionally thin:
+Skill material is rendered before planner budgeting:
 
 ```text
-ManualSkillActivator.activate()
+base system prompt
       ↓
-SkillActivationService.activate(... origin=manual)
+summary checkpoint
+      ↓
+Skill catalog + active bodies
+      ↓
+ContextPlanner.prepare()
+      ↓
+PreparedContext
 ```
 
-There is no second manual Skill runtime.
-
-### References/scripts boundary
-
-Activation/loading still reads only `SKILL.md`.
+Forbidden:
 
 ```text
-references/foo.md
-→ only through an explicit ordinary read tool
-
-scripts/check.*
-→ only through an explicit ordinary execution/shell tool
+PreparedContext
+      ↓
+append Skill text afterwards   ❌
 ```
 
-The v0.4.6 test places a real reference and a script with an observable side effect; Skill activation neither exposes the reference content through events nor executes the script.
+If mandatory Skill material makes the input budget impossible, the runtime fails explicitly.
 
-### Verification
+---
 
-Strict TypeScript source-subset compilation passed with:
+## Durable-history invariant
+
+```text
+Durable AgentMessage[]
+contains:
+- user messages
+- assistant messages
+- real tool calls/results
+
+Does not contain:
+- Skill catalog supplements
+- active Skill supplements
+- summary checkpoints
+```
+
+`load_skill` writes only a compact acknowledgement such as:
+
+```text
+Skill 'code-review' activated.
+```
+
+Full Skill instructions become model-visible only through `ContextSupplement` on the next turn.
+
+---
+
+## Observability
+
+Skill lifecycle events:
+
+```text
+skill_activation_start
+skill_activated
+skill_activation_reused
+skill_activation_failed
+```
+
+Origins:
+
+```text
+api | manual | tool
+```
+
+Events expose metadata only and never include full instructions. `Agent` bridges them into the regular Agent event stream with `runId` and `turn`.
+
+---
+
+## Safety / package-boundary semantics
+
+`FilesystemSkillLoader` validates:
+
+```text
+absolute root
+absolute manifestPath
+lexical containment
+exact <root>/SKILL.md path
+non-symlink root
+non-symlink manifest
+canonical realpath containment
+manifest identity stability
+```
+
+Loading still touches only the selected `SKILL.md`.
+
+```text
+references/*
+→ ordinary file/read tools only
+
+scripts/*
+→ ordinary explicit execution tools only
+```
+
+No hidden resource execution channel exists in v0.4.
+
+---
+
+## Verification performed
+
+Increment-level source subsets were checked under:
 
 ```text
 strict
@@ -149,31 +252,28 @@ noUncheckedIndexedAccess
 exactOptionalPropertyTypes
 ```
 
-Runtime smoke verified:
+The v0.4.7 integration smoke verified:
 
 ```text
-manual activation          → activated
-same Skill via tool origin → already-active
-loader calls               → 1
-active store entries       → 1
-event body leakage         → false
-listener failure           → isolated
+request 1 → catalog only
+load_skill → compact durable acknowledgement
+request 2 → catalog + selected active Skill body
+request 3 in a new prompt → catalog only again
+loader calls for selected Skill → 1
+unselected Skill body → never provider-visible
+Skill event payloads → no body leakage
 ```
 
 The full repository Vitest suite is not claimed as run in the current execution environment.
 
-## Next — v0.4.7
+---
 
-Final integration will make Agent own the per-run Skill lifecycle:
+## Next version
+
+`v0.4` is frozen. The next architectural theme is `v0.5`:
 
 ```text
-run start
-→ discover/register Skills
-→ clear ActiveSkillStore
-→ expose compact catalog + load_skill
-→ active bodies become next-turn supplements
-→ emit/bridge lifecycle events
-→ run end clears active state
+Extensions / lifecycle hooks
 ```
 
-Then package/runtime/docs advance to `0.4.0` and the branch freezes as a historical learning snapshot.
+A Skill teaches the model what to do. An Extension will be trusted executable runtime customization that changes registrations or lifecycle behavior.
