@@ -25,10 +25,13 @@ ExtensionDefinition
 ExtensionHost
       ↓
 scoped ExtensionAPI during setup only
-      ↓
-owned registrations
-      ↓
-HookPipeline
+      ├── on(hook, handler)
+      │       ↓
+      │   HookPipeline
+      │
+      └── registerTool(tool)
+              ↓
+          ToolRegistry
 ```
 
 The Host now guarantees:
@@ -37,11 +40,31 @@ The Host now guarantees:
 normalized unique Extension identity
 deterministic serialized setup order
 setup-scoped registration capability
-atomic rollback on failed setup
+atomic rollback across mixed hook/tool registrations
 exact owned-registration cleanup on unload
 ```
 
-`Agent` and `AgentLoop` are not integrated with Extensions yet.
+`Agent` and `AgentLoop` are not integrated with Extension hooks yet.
+
+## Tool registration invariant
+
+Extension Tools are ordinary Tools:
+
+```text
+ExtensionAPI.registerTool(tool)
+      ↓
+ToolRegistry.register(tool)
+      ↓
+ToolRegistry.get / validate
+      ↓
+Tool.execute
+```
+
+There is no separate Extension Tool executor.
+
+`ToolRegistry.register()` returns an identity-safe removable handle. Disposing an old registration cannot remove a later replacement under the same name.
+
+Duplicate Tool names fail explicitly through `ToolAlreadyRegisteredError`; Extension setup preserves that typed error as `ExtensionSetupError.cause` and rolls back earlier registrations from the same setup.
 
 ## Hook surface
 
@@ -65,30 +88,6 @@ continue / replace arguments / block
 
 Only explicit handler return values have runtime meaning. Handler mutation of cloned event input does not.
 
-## Extension setup lifecycle
-
-```text
-ExtensionHost.load(definition)
-      ↓
-validate name/version/setup
-      ↓
-create owned registration set
-      ↓
-open scoped ExtensionAPI
-      ↓
-await setup(api)
-      ↓
-SUCCESS                 FAILURE
-  │                         │
-close API               close API
-  │                         │
-commit loaded record     rollback registrations
-                            │
-                       ExtensionSetupError
-```
-
-The scoped API cannot be retained and used to register handlers after setup completes.
-
 ## Ordering
 
 Reference v0.5 order remains intentionally simple:
@@ -99,7 +98,7 @@ then
 handler registration order within each setup
 ```
 
-Host operations are serialized so async setup completion timing cannot change handler ordering.
+Host operations are serialized so async setup completion timing cannot change registration ordering.
 
 No numeric hook priorities exist in v0.5.
 
@@ -108,15 +107,16 @@ No numeric hook priorities exist in v0.5.
 ```text
 v0.5.1  hook contracts + deterministic HookPipeline          ✅
 v0.5.2  ExtensionDefinition + ExtensionHost + ownership      ✅
+v0.5.3  Extension-owned Tool registration + unload cleanup   ✅
 ```
 
 ## Next increment
 
 ```text
-v0.5.3  Extension-owned Tool registration + unload cleanup   ← next
+v0.5.4  before_tool gate/replace Runtime integration          ← next
 ```
 
-The next step adds `registerTool()` to the same setup-scoped `ExtensionAPI` and makes Tool registrations participate in the same ownership/rollback/unload model.
+The next step inserts the already-defined HookPipeline into the ordinary ToolCall → ToolRegistry.validate → Tool.execute path, preserving ToolCall id/name and turning blocks into explicit error ToolResults.
 
 ## Explicit non-goals
 
