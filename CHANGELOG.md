@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.3.6
+
+- Added `ContextSummarizer` and `ContextSummarizerInput/Result` contracts.
+- Added deterministic offline `DeterministicContextSummarizer` for network-independent mechanism testing.
+- Added `ProgressiveSummaryPolicy` that advances checkpoints from the previous coverage boundary using only newly covered durable history.
+- Required checkpoint coverage boundaries to align with the end of complete `ContextUnit`s, preventing summaries from cutting through tool exchanges.
+- Added explicit no-op behavior for same-boundary advancement.
+- Added failure-atomic commit ordering so summarizer failure or cancellation before `SummaryStore.put()` leaves the previous checkpoint unchanged.
+- Added `InvalidSummaryCoverageBoundaryError` and `SummaryGenerationError`.
+- Added tests for first checkpoint creation, incremental advancement, no-op, coverage regression, tool-exchange boundaries, failure atomicity, durable-history immutability, Unicode-safe deterministic summarization, and cancellation before commit.
+- Kept AgentLoop unchanged; runtime integration remains v0.3.7.
+
 ## v0.3.5
 
 - Added explicit `ContextSummary` checkpoint artifacts with stable identity, content, prefix coverage, estimated tokens, and creation time.
