@@ -33,6 +33,14 @@ export {
   type ProgressiveSummaryResult
 } from "./policies/progressive-summary.js";
 export {
+  ContextRuntime,
+  renderSummarySystemPrompt,
+  type ContextRuntimeOptions,
+  type ContextRuntimePrepareInput,
+  type ContextRuntimeResult,
+  type SummaryAdvanceProvenance
+} from "./runtime.js";
+export {
   InMemorySummaryStore,
   type SummaryStore
 } from "./summary-store.js";
