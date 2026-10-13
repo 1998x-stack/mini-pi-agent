@@ -19,7 +19,7 @@ Inherited v0.3 invariant:
 
 ---
 
-## 2. Current Skills architecture
+## 2. Current architecture
 
 ```text
 <cwd>/.mini-pi/skills/*/SKILL.md
@@ -36,17 +36,31 @@ Inherited v0.3 invariant:
               ▼
     FilesystemSkillLoader
               │
-              ├── lexical path validation
-              ├── lstat file-type validation
-              ├── canonical realpath validation
-              ├── manifest identity validation
-              └── parse selected SKILL.md only
-              │
               ▼
           LoadedSkill
               │
+       ┌──────┴─────────┐
+       ▼                ▼
+compact catalog     active body
+       │                │
+       └──────┬─────────┘
               ▼
- future catalog/context/activation layers
+      ContextSupplement[]
+              │
+              ▼
+        ContextRuntime
+              │
+     summary + supplements
+     rendered before planner
+              │
+              ▼
+     KeepRecentContextPlanner
+              │
+              ▼
+       PreparedContext
+              │
+              ▼
+          LLMProvider
 ```
 
 The Agent Loop still contains no Skill-specific branch.
@@ -57,20 +71,22 @@ The Agent Loop still contains no Skill-specific branch.
 
 ```text
 Level 0 — descriptor catalog                         ✅
-name + description + package identity
+name + description only in model catalog
 
-Level 1 — selected SKILL.md instructions             ✅ loading primitive
+Level 1 — selected SKILL.md instructions             ✅ primitive + context supplement
 
 Level 2 — optional references                        not auto-loaded
 
 Level 3 — scripts/assets/templates                   not auto-executed
 ```
 
-Strict rule:
+Strict rules:
 
 ```text
 discover != load
-load != execute
+load != activate
+activate != execute
+knowledge source != durable history
 ```
 
 ---
@@ -79,99 +95,134 @@ load != execute
 
 ### v0.4.1 — Skill manifest parser + core types ✅
 
-Implemented deterministic, dependency-free parsing for the educational `SKILL.md` scalar-frontmatter subset.
-
-Core contracts:
-
-```ts
-interface SkillManifest {
-  name: string;
-  description: string;
-  metadata?: Record<string, string>;
-}
-
-interface ParsedSkillDocument {
-  manifest: SkillManifest;
-  instructions: string;
-}
-```
+Implemented deterministic parsing for the educational scalar-frontmatter `SKILL.md` subset.
 
 ### v0.4.2 — ProjectSkillSource + SkillRegistry ✅
 
-Implemented project-local one-level discovery and deterministic descriptor cataloging.
-
-```text
-<cwd>/.mini-pi/skills/*/SKILL.md
-          ↓
-SkillDescriptor[]
-          ↓
-SkillRegistry
-```
-
-Registry identity is `trim + lowercase`; normalized duplicates fail explicitly.
+Implemented one-level project discovery and deterministic descriptor identity/order semantics.
 
 ### v0.4.3 — SkillLoader + path/root validation ✅
+
+Implemented safe on-demand loading of exactly one selected `SKILL.md`, including lexical containment, real file/symlink checks, canonical `realpath` checks, identity-drift detection, descriptor cloning, and cancellation propagation.
+
+### v0.4.4 — Catalog renderer + context supplement seam ✅
 
 Implemented:
 
 ```text
-src/skills/loader.ts
-src/skills/paths.ts
-src/skills/types.ts
-src/skills/errors.ts
+src/skills/catalog.ts
+src/context/supplements.ts
+src/context/errors.ts
+src/context/runtime.ts
+src/context/index.ts
 src/skills/index.ts
 
-tests/skill-loader.test.ts
-tests/skill-paths.test.ts
+tests/skill-catalog.test.ts
+tests/context-supplements.test.ts
 ```
 
-Public contracts:
+Generic model-only context contract:
 
 ```ts
-interface LoadedSkill {
-  descriptor: SkillDescriptor;
-  instructions: string;
+interface ContextSupplement {
+  id: string;
+  kind: "skill-catalog" | "active-skill";
+  content: string;
+  required: boolean;
 }
-
-interface SkillLoader {
-  load(descriptor: SkillDescriptor, signal: AbortSignal): Promise<LoadedSkill>;
-}
-
-class FilesystemSkillLoader implements SkillLoader
 ```
 
-Path safety is intentionally layered:
+Skill producers:
+
+```ts
+renderSkillCatalog(descriptors)
+createSkillCatalogSupplement(descriptors)
+createLoadedSkillSupplement(loadedSkill)
+skillSupplementId(name)
+```
+
+Catalog semantics:
 
 ```text
-1. descriptor root must be absolute
-2. descriptor manifestPath must be absolute
-3. manifestPath must stay lexically under root
-4. manifestPath must be exactly <root>/SKILL.md
-5. root must be a real directory, not a symlink
-6. manifest must be a real regular file, not a symlink
-7. realpath(manifest) must stay under realpath(root)
-8. canonical manifest must still equal <canonical-root>/SKILL.md
+SkillDescriptor[]
+      ↓ deterministic normalized-name order
+<available_skills>
+{"name":"code-review","description":"Review changes."}
+{"name":"release","description":"Prepare a release."}
+</available_skills>
 ```
 
-Identity validation:
+The catalog deliberately excludes:
 
 ```text
-descriptor.name
-      ↓ normalize(trim + lowercase)
-parsed SKILL.md name
+instructions
+metadata
+root
+manifestPath
+references/scripts/assets
 ```
 
-A mismatch fails through `SkillIdentityMismatchError` rather than silently loading a different Skill.
+Active Skill semantics:
 
-Path/file-type violations fail through `SkillPathError`.
+```text
+LoadedSkill
+   ↓
+required active-skill ContextSupplement
+   ↓
+full instructions for that selected Skill only
+```
 
-The returned descriptor is cloned, including metadata, so loading does not expose or mutate shared descriptor state.
+ContextRuntime now accepts:
 
-Most importantly, the loader reads only the selected `SKILL.md`. It does not traverse `references/`, `scripts/`, or `assets/`.
+```ts
+interface ContextRuntimePrepareInput {
+  systemPrompt: string;
+  history: readonly AgentMessage[];
+  supplements?: readonly ContextSupplement[];
+  signal: AbortSignal;
+}
+```
 
-### v0.4.3 verification
+Composition order:
 
-The Skills source subset passed TypeScript checking under:
+```text
+base system prompt
+      ↓
+summary checkpoint, if any
+      ↓
+normalized context supplements
+      ↓
+ContextPlanner.prepare()
+      ↓
+final budget validation
+```
+
+Therefore Skill material cannot bypass token accounting by being appended after planning.
+
+The reference runtime currently treats every supplied supplement as mandatory model-visible system material. `required` is explicit policy metadata for later strategies; v0.4.4 does not silently drop optional or required supplements.
+
+Supplement identity/order semantics:
+
+- ids are validated and unique;
+- catalog renders before active Skill bodies;
+- active bodies are deterministically ordered by supplement id;
+- safe Skill names get readable ids such as `skill:name:code-review`;
+- other names use collision-safe UTF-8 hex ids;
+- invalid/duplicate supplements fail through `InvalidContextSupplementError`.
+
+Most importantly:
+
+```text
+ContextSupplement
+!=
+AgentMessage
+```
+
+Catalog, active instructions, and summary checkpoints are provider-context artifacts only. They are never appended to durable conversation history.
+
+### v0.4.4 verification
+
+The source subset passed TypeScript checking under:
 
 ```text
 strict
@@ -179,29 +230,18 @@ noUncheckedIndexedAccess
 exactOptionalPropertyTypes
 ```
 
-Filesystem runtime smoke verified:
+Runtime smoke verified:
 
 ```text
-normal selected Skill
-→ instructions loaded
-→ source descriptor unchanged
-→ returned descriptor is a copy
+Skill catalog + active Skill + existing summary
+→ all rendered once in model-only system context
+→ estimator/planner includes them in input budget
+→ provider-visible messages begin after summary coverage
+→ durable history remains unchanged
 
-broken reference under references/
-→ ignored by loader
-→ Skill still loads
-
-manifest name drift
-→ SkillIdentityMismatchError
-
-symlink package root
-→ SkillPathError
-
-symlink SKILL.md
-→ SkillPathError
-
-pre-aborted signal
-→ original abort reason propagated
+oversized active Skill supplement
+→ ContextBudgetExceededError
+→ no post-planner bypass
 ```
 
 The full repository Vitest suite is not claimed as run in the current execution environment.
@@ -214,35 +254,56 @@ The full repository Vitest suite is not claimed as run in the current execution 
 v0.4.1  Skill manifest parser + core types                   ✅
 v0.4.2  ProjectSkillSource + SkillRegistry                  ✅
 v0.4.3  SkillLoader + path/root validation                  ✅
-v0.4.4  compact catalog + context supplement seam           ← next
-v0.4.5  run-scoped activation + load_skill adapter
+v0.4.4  compact catalog + context supplement seam           ✅
+v0.4.5  run-scoped activation + load_skill adapter          ← next
 v0.4.6  references + events + manual activation surface
 v0.4.7  Agent integration + examples + 0.4.0 freeze
 ```
 
 ---
 
-## 6. Next increment — v0.4.4
+## 6. Next increment — v0.4.5
 
-The next problem is:
-
-```text
-We can discover Skills and safely load one selected Skill.
-How do compact descriptors and active Skill instructions enter model context
-without bypassing the v0.3 token budget?
-```
-
-v0.4.4 introduces:
+The next problem is now:
 
 ```text
-Skill catalog renderer
-ContextSupplement
-supplement-aware ContextRuntime / planner composition
+The runtime can discover Skills, safely load one,
+and budget catalog/active bodies.
+
+How does the model request activation during a run?
 ```
 
-Required invariant:
+v0.4.5 introduces:
 
-> **Skill text must be budgeted before the provider request is finalized. Never append Skill text after context planning.**
+```text
+ActiveSkillStore
+SkillActivationService
+load_skill Tool adapter
+```
+
+Target flow:
+
+```text
+compact catalog
+      ↓
+model calls load_skill(name)
+      ↓
+SkillActivationService
+      ↓
+SkillRegistry lookup
+      ↓
+SkillLoader.load()
+      ↓
+run-scoped ActiveSkillStore
+      ↓
+next ContextRuntime.prepare()
+      ↓
+active-skill supplement
+```
+
+Key invariant:
+
+> `load_skill` acknowledges activation with a compact ToolResult; it must not duplicate the entire Skill body inside durable tool history.
 
 ---
 
