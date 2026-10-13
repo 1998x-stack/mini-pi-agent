@@ -1,14 +1,14 @@
-# v0.4 Implementation Plan
+# v0.4 Implementation — Complete
 
 Primary invariant:
 
-> A Skill changes model guidance, not runtime execution semantics.
+> **A Skill changes model guidance, not runtime execution semantics.**
 
 Secondary invariant:
 
-> Full Skill bodies are exposed progressively rather than globally injected.
+> **Full Skill bodies are exposed progressively rather than globally injected.**
 
-## Completed
+## Completed increments
 
 ```text
 v0.4.1  Skill manifest parser + core types                   ✅
@@ -17,137 +17,176 @@ v0.4.3  SkillLoader + path/root validation                  ✅
 v0.4.4  catalog renderer + ContextSupplement seam           ✅
 v0.4.5  run-scoped activation + load_skill adapter          ✅
 v0.4.6  references boundary + events + manual activation    ✅
+v0.4.7  Agent integration + examples + 0.4.0 freeze         ✅
 ```
-
-## v0.4.6 — References + events + manual activation ✅
-
-Implemented:
-
-```text
-src/skills/events.ts
-src/skills/manual-activation.ts
-src/skills/activation-service.ts
-src/skills/load-skill-tool.ts
-src/skills/index.ts
-
-tests/skill-events.test.ts
-examples/08-skill-manual-activation.ts
-```
-
-### Lifecycle events
-
-Metadata-only event contract:
-
-```text
-skill_activation_start
-skill_activated
-skill_activation_reused
-skill_activation_failed
-```
-
-Origins:
-
-```text
-api | manual | tool
-```
-
-Events may include name, normalized name, manifest path, and compact error name/message. They never include `LoadedSkill.instructions`.
-
-`SkillEventBus` isolates listener failures so observation cannot alter activation semantics.
-
-### Shared activation path
-
-```text
-load_skill Tool
-      ┐
-      ├→ SkillActivationService → ActiveSkillStore
-      │
-ManualSkillActivator
-      ┘
-```
-
-`ManualSkillActivator` is only a thin origin-marking facade; it owns no registry, loader, or store.
-
-### Reference/script boundary
-
-No new resource execution protocol exists.
-
-```text
-references/*.md
-→ ordinary read/file ToolCall only
-
-scripts/*
-→ ordinary explicit shell/execution ToolCall only
-```
-
-Activation and loading still touch only the selected `SKILL.md`.
-
-### Verification
-
-Strict TypeScript source-subset checking passed with `strict`, `noUncheckedIndexedAccess`, and `exactOptionalPropertyTypes`.
-
-Runtime smoke verified one shared store/service across manual and tool-origin activation, normalized idempotency, one loader call, metadata-only events, and listener-failure isolation.
-
-The full repository Vitest suite is not claimed as run in the current execution environment.
 
 ---
 
-## v0.4.7 — Agent integration + examples + 0.4.0 freeze ← next
+## v0.4.7 — Agent integration + freeze ✅
 
-### Goal
-
-Integrate the complete Skills lifecycle with `Agent` while keeping `AgentLoop` generic and freezing an end-to-end educational snapshot.
-
-### Add/update
+### Added/updated
 
 ```text
+src/skills/runtime.ts
 src/core/agent.ts
-src/core/agent-loop.ts only if a generic supplement-provider seam is needed
-src/core/events.ts for bridged Agent-level Skill metadata events
+src/core/agent-loop.ts
+src/core/events.ts
+src/skills/index.ts
 src/index.ts
-README.md
+
+tests/agent-skills-integration.test.ts
+examples/09-progressive-skills.ts
+
 package.json
 src/version.ts
+README.md
 version.md
 CHANGELOG.md
-examples/09-progressive-skills.ts
-tests/agent-skills-integration.test.ts
+docs/v0.4/ARCHITECTURE.md
+docs/versions/v0.4.md
 ```
 
-### Target run lifecycle
+### Composition root
+
+`SkillRuntime` now owns the Agent-lifetime Skills composition:
 
 ```text
-Agent.prompt() starts
+ProjectSkillSource
+      ↓
+SkillRegistry
+      ↓
+SkillActivationService
+      ↓
+ActiveSkillStore
+      ↓
+LoadSkillTool + ManualSkillActivator + SkillEventBus
+```
+
+Discovery/catalog state persists for the Agent lifetime.
+
+Active state is explicitly cleared at each `Agent.prompt()` boundary.
+
+### Agent configuration
+
+```ts
+const agent = await Agent.create({
+  provider,
+  cwd,
+  context: {
+    planner,
+    budget
+  },
+  skills: {}
+});
+```
+
+`skills` requires `context`.
+
+Reason:
+
+```text
+Skill catalog/body
+must be present before ContextPlanner budgeting
+```
+
+Legacy `ContextTransform` is therefore not a supported Skills injection path.
+
+### AgentLoop seam
+
+`runAgentLoop()` remains unaware of SkillRegistry, SkillLoader, activation, or concrete Skill names.
+
+Its generic addition is:
+
+```ts
+contextSupplements?: () => readonly ContextSupplement[]
+```
+
+Each model turn performs:
+
+```text
+contextSupplements()
+      ↓
+ContextRuntime.prepare(... supplements ...)
+      ↓
+PreparedContext
+```
+
+This is why a Skill activated through a tool call in turn N appears naturally in model context on turn N+1.
+
+### Run lifecycle
+
+```text
+Agent.prompt() start
       ↓
 clear ActiveSkillStore
       ↓
-compact Skill catalog supplied to context
+first turn sees compact catalog
       ↓
-load_skill available as ordinary tool
+model calls load_skill(name)
       ↓
-model activates one Skill
+compact ToolResult enters durable history
       ↓
-next provider request contains active Skill supplement
+next turn sees catalog + active Skill body
       ↓
-other Skill bodies remain unloaded/unexposed
+prompt() finally
+      ↓
+clear ActiveSkillStore
+```
+
+The next prompt starts with catalog-only context again.
+
+### Agent event bridge
+
+Metadata-only Skill lifecycle events are bridged into the normal Agent event stream with:
+
+```text
+runId
+turn
+origin
+Skill metadata
+```
+
+Core events define their own bridged origin type so `core/events.ts` does not depend on the Skills subsystem.
+
+### End-to-end proof
+
+`tests/agent-skills-integration.test.ts` proves:
+
+```text
+2 project Skills discovered
+      ↓
+request 1
+catalog contains both descriptors
+no Skill body visible
+      ↓
+model calls load_skill("code-review")
+      ↓
+loader called for code-review only
+      ↓
+durable ToolResult is compact
+      ↓
+request 2
+code-review body visible
+release body still absent
       ↓
 run ends
       ↓
-active state clears before next run
+request 3 in new prompt
+catalog still visible
+code-review body absent again
 ```
 
-### Must prove
+It also verifies Agent-level Skill events contain no full instructions and that Skills cannot be enabled without ContextRuntime.
 
-- Agent configuration can discover/register project Skills deterministically;
-- catalog is visible without loading all bodies;
-- `load_skill` uses the shared activation service;
-- active bodies appear only on turns after activation;
-- active state is per run and cleared between prompts;
-- Skill lifecycle events can be bridged to Agent observation without body leakage;
-- durable history contains ordinary tool calls/results, never ContextSupplements;
-- references/scripts retain ordinary tool-path semantics;
-- package/runtime version becomes `0.4.0` only after acceptance checks;
-- docs describe implemented architecture, not future targets.
+### Example
+
+```bash
+npm run demo:skills
+```
+
+`examples/09-progressive-skills.ts` creates a self-contained temporary project Skill catalog and demonstrates the full progressive disclosure loop.
+
+---
 
 ## Final Definition of Done
 
@@ -164,9 +203,36 @@ active state clears before next run
 - [x] scripts remain ordinary tool executions
 - [x] Skill lifecycle events
 - [x] shared manual activation surface
-- [ ] deterministic Agent end-to-end integration tests
+- [x] deterministic Agent end-to-end integration tests added
 - [x] manual activation educational example
-- [ ] progressive Agent Skills example
-- [ ] package/version/docs finalization
+- [x] progressive Agent Skills example
+- [x] package/runtime version finalized as `0.4.0`
+- [x] README/version/architecture docs finalized
 
-Only then freeze `v0.4`.
+---
+
+## Verification status
+
+Performed during v0.4 increments:
+
+```text
+strict TypeScript source-subset checking
+noUncheckedIndexedAccess
+exactOptionalPropertyTypes
+filesystem loading smoke
+activation smoke
+context-supplement budget smoke
+Agent progressive-Skills integration smoke
+```
+
+Final v0.4.7 smoke produced the expected sequence:
+
+```text
+catalog-only
+→ catalog + selected Skill body
+→ catalog-only on next prompt
+```
+
+The full repository Vitest suite is **not claimed as executed** in the current environment because repository dependencies cannot be installed through the unavailable network path.
+
+`v0.4` is now frozen as the canonical historical learning branch for Skills.
