@@ -3,6 +3,37 @@ import type { AgentMessage, AssistantMessage, ToolCall, ToolResultMessage } from
 export type AgentEvent =
   | { type: "agent_start"; runId: string; input: string }
   | { type: "turn_start"; runId: string; turn: number }
+  | {
+      type: "context_prepare_start";
+      runId: string;
+      turn: number;
+      durableMessageCount: number;
+    }
+  | {
+      type: "context_summary_advanced";
+      runId: string;
+      turn: number;
+      summaryId: string;
+      previousCoverage: number | null;
+      nextCoverage: number;
+      newlyCoveredRange: {
+        startMessageIndex: number;
+        endMessageIndex: number;
+      };
+    }
+  | {
+      type: "context_prepared";
+      runId: string;
+      turn: number;
+      modelMessageCount: number;
+      estimatedInputTokens: number;
+      compacted: boolean;
+      durableTailStartMessageIndex: number;
+      omittedTailMessageCount: number;
+      reducedToolResultCount: number;
+      summaryId?: string;
+      summaryCoverage?: number;
+    }
   | { type: "text_delta"; runId: string; turn: number; delta: string }
   | { type: "assistant_message"; runId: string; turn: number; message: AssistantMessage }
   | { type: "tool_start"; runId: string; turn: number; call: ToolCall }
