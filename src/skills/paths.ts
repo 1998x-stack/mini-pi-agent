@@ -1,4 +1,4 @@
-import { isAbsolute, relative, resolve } from "node:path";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import { SkillPathError } from "./errors.js";
 import type { SkillDescriptor } from "./types.js";
 
@@ -12,7 +12,9 @@ export function isPathWithinRoot(root: string, candidate: string): boolean {
   const relativePath = relative(root, candidate);
   return (
     relativePath === "" ||
-    (!relativePath.startsWith("..") && !isAbsolute(relativePath))
+    (relativePath !== ".." &&
+      !relativePath.startsWith(`..${sep}`) &&
+      !isAbsolute(relativePath))
   );
 }
 
