@@ -1,4 +1,10 @@
 export {
+  createLoadedSkillSupplement,
+  createSkillCatalogSupplement,
+  renderSkillCatalog,
+  SKILL_CATALOG_SUPPLEMENT_ID
+} from "./catalog.js";
+export {
   DuplicateSkillError,
   InvalidSkillManifestError,
   SkillError,
