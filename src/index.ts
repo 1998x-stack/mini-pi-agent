@@ -1,7 +1,12 @@
 export { MINI_PI_VERSION } from "./version.js";
 export { Agent, type AgentOptions } from "./core/agent.js";
 export { runAgentLoop, type AgentLoopDependencies } from "./core/agent-loop.js";
-export { EventBus, type AgentEvent, type AgentEventListener } from "./core/events.js";
+export {
+  EventBus,
+  type AgentEvent,
+  type AgentEventListener,
+  type AgentSkillActivationOrigin
+} from "./core/events.js";
 export { IdentityContextTransform, TailContextTransform, type ContextTransform } from "./core/context.js";
 export { ToolRegistry } from "./core/tool-registry.js";
 export type { Tool, ToolExecutionContext, ToolResult, JsonSchema } from "./core/tool.js";
