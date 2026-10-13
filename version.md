@@ -1,279 +1,171 @@
-# mini-pi-agent v0.4
+# mini-pi-agent v0.5
 
 ## Version identity
 
-- **Branch:** `v0.4`
-- **Base snapshot:** completed `v0.3`
-- **Package/runtime version:** `0.4.0`
-- **Theme:** Skills + progressive disclosure
-- **Status:** **implemented historical learning snapshot**
+- **Branch:** `v0.5`
+- **Base snapshot:** frozen `v0.4.0`
+- **Current package/runtime:** `0.4.0` until v0.5 freeze
+- **Target package/runtime:** `0.5.0`
+- **Theme:** Extensions + lifecycle hooks
+- **Status:** **active design/implementation snapshot**
 
 Primary mental model:
 
-> **A Skill is discoverable workflow knowledge. It changes model guidance without changing runtime execution semantics.**
+> **A Skill teaches the model how to work; an Extension is trusted executable code that changes runtime behavior only through explicit lifecycle contracts.**
 
-Inherited v0.3 invariant:
+Second invariant:
 
-> **Available knowledge is not the same thing as model-visible context.**
-
----
-
-## Final architecture
-
-```text
-<cwd>/.mini-pi/skills/*/SKILL.md
-              │
-              ▼
-      ProjectSkillSource
-              │
-              ▼
-      SkillDescriptor[]
-              │
-              ▼
-        SkillRegistry
-          │         │
-          │         └──── compact catalog ───────────┐
-          │ selected descriptor                      │
-          ▼                                          │
-    FilesystemSkillLoader                            │
-          │                                          │
-          ▼                                          │
-       LoadedSkill                                   │
-          │                                          │
-          ▼                                          │
- SkillActivationService                              │
-      ┌───┴──────────────┐                           │
-      ▼                  ▼                           │
- load_skill Tool   ManualSkillActivator              │
-      │                  │                           │
-      └───────┬──────────┘                           │
-              ▼                                      │
-      ActiveSkillStore                               │
-              │                                      │
-              └──── active Skill supplements ─────────┘
-                             │
-                             ▼
-                     ContextSupplement[]
-                             │
-                             ▼
-                       ContextRuntime
-                             │
-                             ▼
-                       ContextPlanner
-                             │
-                             ▼
-                      PreparedContext
-                             │
-                             ▼
-                        LLMProvider
-```
-
-`AgentLoop` remains Skill-agnostic. Its only v0.4 addition is a generic `contextSupplements()` seam.
+> **Event observes. Hook participates.**
 
 ---
 
-## Progressive disclosure
+## Target architecture
 
 ```text
-Level 0 — SkillDescriptor catalog                  ✅
-Level 1 — selected SKILL.md instructions           ✅
-Level 2 — references/* via ordinary file tools     ✅ boundary preserved
-Level 3 — scripts/assets via ordinary tools        ✅ boundary preserved
+ExtensionDefinition[]
+        │
+        ▼
+   ExtensionHost
+        │
+        ├── owned Tool registrations ─────► ToolRegistry
+        │
+        ├── owned Hook registrations ─────► HookPipeline
+        │
+        └── context contributions ─────────► ContextSupplement[]
+                                             │
+                                             ▼
+                                       ContextRuntime
+
+Agent / AgentLoop
+        │
+        ├── before_run
+        ├── before_model
+        ├── after_model
+        ├── before_tool
+        ├── after_tool
+        ├── after_turn
+        └── after_run
+                 │
+                 ▼
+            HookPipeline
+                 │
+                 ▼
+       extension handlers in
+       deterministic order
 ```
 
-Strict rules:
-
-```text
-discover != load
-load != activate
-activate != execute
-Skill body != load_skill ToolResult
-ContextSupplement != AgentMessage
-```
+`AgentLoop` may know hook names and generic hook results. It must never know concrete Extension names or policies.
 
 ---
 
-## Implemented increments
+## Extension / Skill / Tool boundary
 
 ```text
-v0.4.1  manifest parser + core types                         ✅
-v0.4.2  ProjectSkillSource + SkillRegistry                  ✅
-v0.4.3  SkillLoader + path/root safety                      ✅
-v0.4.4  compact catalog + ContextSupplement budget seam     ✅
-v0.4.5  ActiveSkillStore + ActivationService + load_skill   ✅
-v0.4.6  references boundary + events + manual activation    ✅
-v0.4.7  Agent integration + examples + 0.4.0 freeze         ✅
-```
+Skill
+→ declarative workflow knowledge
+→ changes model guidance
 
----
+Tool
+→ environment capability
+→ executes an action
 
-## Agent run lifecycle
-
-```text
-Agent.create()
-   ↓
-discover project Skills once
-   ↓
-build SkillRegistry
-   ↓
-register ordinary load_skill Tool
-
-Agent.prompt()
-   ↓
-clear ActiveSkillStore
-   ↓
-turn 1: catalog supplement only
-   ↓
-model may call load_skill(name)
-   ↓
-compact ToolResult enters durable history
-   ↓
-turn 2+: catalog + active Skill supplements
-   ↓
-run ends
-   ↓
-clear ActiveSkillStore
-```
-
-Catalog/discovery state lives for the Agent lifetime. Active Skill bodies are strictly run-scoped.
-
----
-
-## Context invariant
-
-Skill material is rendered before planner budgeting:
-
-```text
-base system prompt
-      ↓
-summary checkpoint
-      ↓
-Skill catalog + active bodies
-      ↓
-ContextPlanner.prepare()
-      ↓
-PreparedContext
+Extension
+→ trusted runtime customization
+→ registers capabilities and lifecycle handlers
 ```
 
 Forbidden:
 
 ```text
-PreparedContext
-      ↓
-append Skill text afterwards   ❌
+Extension gets mutable Agent internals
+Extension mutates durable history directly
+Extension appends model text after ContextPlanner budgeting
+AgentLoop branches on extension name
 ```
-
-If mandatory Skill material makes the input budget impossible, the runtime fails explicitly.
 
 ---
 
-## Durable-history invariant
+## Hook ordering
+
+Reference v0.5 order is intentionally simple:
 
 ```text
-Durable AgentMessage[]
-contains:
-- user messages
-- assistant messages
-- real tool calls/results
-
-Does not contain:
-- Skill catalog supplements
-- active Skill supplements
-- summary checkpoints
+extension load order
+then
+handler registration order within extension
 ```
 
-`load_skill` writes only a compact acknowledgement such as:
-
-```text
-Skill 'code-review' activated.
-```
-
-Full Skill instructions become model-visible only through `ContextSupplement` on the next turn.
+No numeric priority system in v0.5.
 
 ---
 
-## Observability
-
-Skill lifecycle events:
+## Initial hook surface
 
 ```text
-skill_activation_start
-skill_activated
-skill_activation_reused
-skill_activation_failed
+before_run
+before_model
+after_model
+before_tool
+after_tool
+after_turn
+after_run
 ```
 
-Origins:
+Categories:
 
 ```text
-api | manual | tool
+Observe   → after_model / after_turn / after_run
+Transform → before_model / after_tool
+Gate      → before_tool
 ```
 
-Events expose metadata only and never include full instructions. `Agent` bridges them into the regular Agent event stream with `runId` and `turn`.
+The strongest initial interception point is `before_tool`:
+
+```text
+ToolCall
+   ↓
+before_tool handlers
+   ├── continue
+   ├── replace arguments
+   └── block with explicit reason
+   ↓
+ordinary Tool execution
+```
 
 ---
 
-## Safety / package-boundary semantics
-
-`FilesystemSkillLoader` validates:
+## Implementation stages
 
 ```text
-absolute root
-absolute manifestPath
-lexical containment
-exact <root>/SKILL.md path
-non-symlink root
-non-symlink manifest
-canonical realpath containment
-manifest identity stability
+v0.5.1  hook contracts + deterministic HookPipeline           ← next
+v0.5.2  ExtensionDefinition + ExtensionHost + ownership
+v0.5.3  extension-owned Tool registration + unload cleanup
+v0.5.4  before_tool gate/transform integration
+v0.5.5  model/run hooks + budgeted context contributions
+v0.5.6  failure/cancellation/events/cleanup semantics
+v0.5.7  Agent integration + examples + 0.5.0 freeze
 ```
-
-Loading still touches only the selected `SKILL.md`.
-
-```text
-references/*
-→ ordinary file/read tools only
-
-scripts/*
-→ ordinary explicit execution tools only
-```
-
-No hidden resource execution channel exists in v0.4.
 
 ---
 
-## Verification performed
+## Explicit non-goals
 
-Increment-level source subsets were checked under:
+Keep out of v0.5:
 
-```text
-strict
-noUncheckedIndexedAccess
-exactOptionalPropertyTypes
-```
-
-The v0.4.7 integration smoke verified:
-
-```text
-request 1 → catalog only
-load_skill → compact durable acknowledgement
-request 2 → catalog + selected active Skill body
-request 3 in a new prompt → catalog only again
-loader calls for selected Skill → 1
-unselected Skill body → never provider-visible
-Skill event payloads → no body leakage
-```
-
-The full repository Vitest suite is not claimed as run in the current execution environment.
+- MCP transport/client (`v0.6`);
+- session DAG/branching (`v0.7`);
+- permission/sandbox implementation (`v0.8`);
+- RPC/headless protocol (`v0.9`);
+- extension package marketplace;
+- dynamic remote code download;
+- hot reload/file watching;
+- numeric hook priorities;
+- background task manager;
+- direct mutable AgentState access;
+- provider-specific hook APIs.
 
 ---
 
-## Next version
+## Branch rule
 
-`v0.4` is frozen. The next architectural theme is `v0.5`:
-
-```text
-Extensions / lifecycle hooks
-```
-
-A Skill teaches the model what to do. An Extension will be trusted executable runtime customization that changes registrations or lifecycle behavior.
+`v0.4` remains frozen. Package/runtime stays `0.4.0` until all v0.5 acceptance checks pass. Only v0.5.7 may freeze the branch as `0.5.0`.
