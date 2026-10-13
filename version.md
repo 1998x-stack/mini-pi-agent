@@ -7,7 +7,7 @@
 - **Current package/runtime:** `0.4.0` until v0.5 freeze
 - **Target package/runtime:** `0.5.0`
 - **Theme:** Extensions + lifecycle hooks
-- **Status:** **active design/implementation snapshot**
+- **Status:** **active implementation snapshot**
 
 Primary mental model:
 
@@ -19,7 +19,24 @@ Second invariant:
 
 ---
 
-## Target architecture
+## Current architecture
+
+```text
+Extension-owned handler
+        │
+        ▼
+   HookPipeline
+        │
+        ├── deterministic registration order
+        ├── cloned HookEvent inputs
+        ├── explicit structured results
+        ├── cancellation propagation
+        └── ExtensionHookError provenance
+```
+
+The first implemented runtime primitive is now the hook pipeline itself. It is not connected to Agent/AgentLoop yet.
+
+Target v0.5 architecture remains:
 
 ```text
 ExtensionDefinition[]
@@ -35,71 +52,13 @@ ExtensionDefinition[]
                                              │
                                              ▼
                                        ContextRuntime
-
-Agent / AgentLoop
-        │
-        ├── before_run
-        ├── before_model
-        ├── after_model
-        ├── before_tool
-        ├── after_tool
-        ├── after_turn
-        └── after_run
-                 │
-                 ▼
-            HookPipeline
-                 │
-                 ▼
-       extension handlers in
-       deterministic order
 ```
 
-`AgentLoop` may know hook names and generic hook results. It must never know concrete Extension names or policies.
+`AgentLoop` may eventually know generic hook names/results, but must never branch on concrete Extension names.
 
 ---
 
-## Extension / Skill / Tool boundary
-
-```text
-Skill
-→ declarative workflow knowledge
-→ changes model guidance
-
-Tool
-→ environment capability
-→ executes an action
-
-Extension
-→ trusted runtime customization
-→ registers capabilities and lifecycle handlers
-```
-
-Forbidden:
-
-```text
-Extension gets mutable Agent internals
-Extension mutates durable history directly
-Extension appends model text after ContextPlanner budgeting
-AgentLoop branches on extension name
-```
-
----
-
-## Hook ordering
-
-Reference v0.5 order is intentionally simple:
-
-```text
-extension load order
-then
-handler registration order within extension
-```
-
-No numeric priority system in v0.5.
-
----
-
-## Initial hook surface
+## Hook surface
 
 ```text
 before_run
@@ -111,34 +70,67 @@ after_turn
 after_run
 ```
 
-Categories:
+Current result powers:
 
 ```text
-Observe   → after_model / after_turn / after_run
-Transform → before_model / after_tool
-Gate      → before_tool
+before_run / before_model
+→ ContextSupplement contributions
+
+after_model / after_turn / after_run
+→ observe only
+
+before_tool
+→ continue
+→ replace arguments
+→ block
+
+after_tool
+→ constrained ToolResult replacement
 ```
 
-The strongest initial interception point is `before_tool`:
+Direct HookEvent mutation is ignored because every handler receives a clone. Behavioral changes must be returned explicitly.
+
+---
+
+## Ordering
+
+Reference v0.5 ordering is intentionally simple:
 
 ```text
-ToolCall
-   ↓
-before_tool handlers
-   ├── continue
-   ├── replace arguments
-   └── block with explicit reason
-   ↓
-ordinary Tool execution
+registration order
 ```
+
+Once ExtensionHost exists this naturally means:
+
+```text
+extension load order
+then handler registration order within each extension
+```
+
+No numeric hook priority system exists in v0.5.
+
+---
+
+## Error / cancellation semantics
+
+```text
+handler throws
+→ ExtensionHookError(extensionName, hook, cause)
+
+AbortSignal aborts
+→ original abort reason propagates
+→ later handlers do not run
+```
+
+A `before_tool` block short-circuits later handlers and records the blocking owner.
 
 ---
 
 ## Implementation stages
 
 ```text
-v0.5.1  hook contracts + deterministic HookPipeline           ← next
-v0.5.2  ExtensionDefinition + ExtensionHost + ownership
+v0.5.1  hook contracts + deterministic HookPipeline           ✅
+v0.5.2  ExtensionDefinition + ExtensionHost + ownership       ← next
 v0.5.3  extension-owned Tool registration + unload cleanup
 v0.5.4  before_tool gate/transform integration
 v0.5.5  model/run hooks + budgeted context contributions
@@ -156,13 +148,28 @@ Keep out of v0.5:
 - session DAG/branching (`v0.7`);
 - permission/sandbox implementation (`v0.8`);
 - RPC/headless protocol (`v0.9`);
-- extension package marketplace;
-- dynamic remote code download;
+- extension marketplace or remote code download;
 - hot reload/file watching;
 - numeric hook priorities;
 - background task manager;
 - direct mutable AgentState access;
 - provider-specific hook APIs.
+
+---
+
+## Verification status
+
+v0.5.1 source subset passed strict TypeScript checking with:
+
+```text
+strict
+noUncheckedIndexedAccess
+exactOptionalPropertyTypes
+```
+
+Runtime smoke verified transform chaining, block short-circuit/provenance, source-event immutability, original abort-reason propagation, and ExtensionHookError cause provenance.
+
+The full repository Vitest suite is not claimed as run in the current execution environment.
 
 ---
 
