@@ -8,7 +8,7 @@ export {
   type AgentSkillActivationOrigin
 } from "./core/events.js";
 export { IdentityContextTransform, TailContextTransform, type ContextTransform } from "./core/context.js";
-export { ToolRegistry } from "./core/tool-registry.js";
+export { ToolRegistry, type ToolRegistration } from "./core/tool-registry.js";
 export type { Tool, ToolExecutionContext, ToolResult, JsonSchema } from "./core/tool.js";
 export type {
   AgentMessage,
