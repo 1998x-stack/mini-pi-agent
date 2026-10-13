@@ -82,6 +82,14 @@ function toAdvanceProvenance(result: ProgressiveSummaryResult): SummaryAdvancePr
   };
 }
 
+function withSummaryCompaction(
+  prepared: PreparedContext,
+  summary: ContextSummary | undefined
+): PreparedContext {
+  if (!summary || prepared.compacted) return prepared;
+  return { ...prepared, compacted: true };
+}
+
 /**
  * Orchestrates model-context preparation without owning durable history.
  *
@@ -138,7 +146,7 @@ export class ContextRuntime {
 
       if (!this.summaryPolicy || prepared.provenance.omittedUnitCount === 0) {
         return {
-          prepared,
+          prepared: withSummaryCompaction(prepared, summary),
           durableTailStartMessageIndex: tailStart,
           summaryAdvances,
           ...(summary ? { summary: cloneContextSummary(summary) } : {})
