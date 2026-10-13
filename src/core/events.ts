@@ -1,4 +1,5 @@
 import type { AgentMessage, AssistantMessage, ToolCall, ToolResultMessage } from "./types.js";
+import type { SkillActivationOrigin } from "../skills/events.js";
 
 export type AgentEvent =
   | { type: "agent_start"; runId: string; input: string }
@@ -33,6 +34,43 @@ export type AgentEvent =
       reducedToolResultCount: number;
       summaryId?: string;
       summaryCoverage?: number;
+    }
+  | {
+      type: "skill_activation_start";
+      runId: string;
+      turn: number;
+      origin: SkillActivationOrigin;
+      requestedName: string;
+      normalizedName: string;
+    }
+  | {
+      type: "skill_activated";
+      runId: string;
+      turn: number;
+      origin: SkillActivationOrigin;
+      name: string;
+      normalizedName: string;
+      manifestPath?: string;
+    }
+  | {
+      type: "skill_activation_reused";
+      runId: string;
+      turn: number;
+      origin: SkillActivationOrigin;
+      name: string;
+      normalizedName: string;
+      manifestPath?: string;
+    }
+  | {
+      type: "skill_activation_failed";
+      runId: string;
+      turn: number;
+      origin: SkillActivationOrigin;
+      requestedName: string;
+      normalizedName: string;
+      manifestPath?: string;
+      errorName: string;
+      errorMessage: string;
     }
   | { type: "text_delta"; runId: string; turn: number; delta: string }
   | { type: "assistant_message"; runId: string; turn: number; message: AssistantMessage }
