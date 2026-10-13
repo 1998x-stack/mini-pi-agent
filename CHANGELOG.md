@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.3.7
+
+- Added `ContextRuntime` as the summary-aware orchestration layer between context mechanisms and `AgentLoop`.
+- Rendered stored summary checkpoints as explicit model-only system context instead of inserting fake durable conversation messages.
+- Planned only the durable-history tail after the latest checkpoint coverage boundary.
+- Added iterative re-planning: when the planner omits older unsummarized units, advance `ProgressiveSummaryPolicy`, then prepare again until stable or `maxSummaryPasses` is exceeded.
+- Added `AgentOptions.context` for configuring planner, budget, SummaryStore, progressive summary policy, and runtime limits.
+- Kept legacy `ContextTransform` behavior available when the v0.3 runtime is not configured; `context` and `contextTransform` are mutually exclusive.
+- Integrated prepared context only at the LLM request boundary while preserving `state.messages` and SessionStore as full durable history.
+- Added `context_prepare_start`, `context_summary_advanced`, and `context_prepared` lifecycle events.
+- Added `tests/agent-context-integration.test.ts` proving summary + recent provider context can be smaller than durable history without deleting history.
+- Added `examples/07-context-compaction.ts` and `npm run demo:context`.
+- Finalized package/runtime version as `0.3.0` and updated README/version documentation.
+- Strict TypeScript integration-subset checking and runtime smoke passed; the full repository Vitest suite is not claimed as run because dependency/network resolution was unavailable.
+
 ## v0.3.6
 
 - Added `ContextSummarizer` and `ContextSummarizerInput/Result` contracts.
@@ -10,7 +25,6 @@
 - Added failure-atomic commit ordering so summarizer failure or cancellation before `SummaryStore.put()` leaves the previous checkpoint unchanged.
 - Added `InvalidSummaryCoverageBoundaryError` and `SummaryGenerationError`.
 - Added tests for first checkpoint creation, incremental advancement, no-op, coverage regression, tool-exchange boundaries, failure atomicity, durable-history immutability, Unicode-safe deterministic summarization, and cancellation before commit.
-- Kept AgentLoop unchanged; runtime integration remains v0.3.7.
 
 ## v0.3.5
 
@@ -22,7 +36,6 @@
 - Added monotonic coverage enforcement with `SummaryCoverageRegressionError` while allowing same-boundary regeneration/retry.
 - Added `InvalidContextSummaryError` and validation helpers.
 - Added tests for checkpoint validation, prefix coverage, copy semantics, forward coverage, same-boundary replacement, clear, and regression rejection.
-- Kept LLM summarization and AgentLoop integration out of this stage; both remain later v0.3 work.
 
 ## v0.3.4
 
@@ -35,7 +48,6 @@
 - Added reduction provenance for model-visible ToolResult projections while preserving durable history unchanged.
 - Added cancellation checks around context preparation.
 - Added tests for full-fit history, suffix selection, tool-exchange atomicity, reducer integration, overflow, incomplete exchange, and cancellation.
-- Kept AgentLoop unchanged; planner integration remains for v0.3.7.
 
 ## v0.3.3
 
@@ -46,7 +58,6 @@
 - Counted and sliced content by Unicode code point to avoid breaking surrogate pairs.
 - Kept durable `ToolResultMessage` content immutable; reduction only produces a model-visible projection.
 - Added tests for small results, large results, error results, Unicode safety, determinism, and invalid options.
-- Kept AgentLoop unchanged; planner integration remains for v0.3.4+.
 
 ## v0.3.2
 
@@ -56,7 +67,6 @@
 - Added explicit support for trailing in-progress tool exchanges with `complete=false` and `missingToolCallIds`.
 - Added `InvalidContextHistoryError` for orphan, duplicate, mismatched, or interleaved tool history.
 - Added tests for causal atomicity and invalid-history failure cases.
-- Kept AgentLoop unchanged; planner integration remains for later v0.3 stages.
 
 ## v0.3.1
 
@@ -64,7 +74,6 @@
 - Added deterministic `ApproximateTokenEstimator` and prepared-input estimation.
 - Added context budget validation and dedicated budget overflow errors.
 - Added unit tests for budget and token-estimation invariants.
-- Kept AgentLoop unchanged; context planning integration remains for later v0.3 stages.
 
 ## v0.1.0
 
