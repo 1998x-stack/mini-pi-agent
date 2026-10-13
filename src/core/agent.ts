@@ -1,8 +1,9 @@
+import { ContextRuntime, type ContextRuntimeOptions } from "../context/runtime.js";
 import type { LLMProvider } from "../llm/types.js";
 import type { SessionStore } from "../session/types.js";
+import { runAgentLoop } from "./agent-loop.js";
 import { IdentityContextTransform, type ContextTransform } from "./context.js";
 import { EventBus, type AgentEventListener } from "./events.js";
-import { runAgentLoop } from "./agent-loop.js";
 import { MessageQueue } from "./queues.js";
 import type { Tool } from "./tool.js";
 import { ToolRegistry } from "./tool-registry.js";
@@ -15,6 +16,9 @@ export interface AgentOptions {
   cwd?: string;
   maxTurns?: number;
   session?: SessionStore;
+  /** v0.3 model-context runtime. Mutually exclusive with legacy contextTransform. */
+  context?: ContextRuntimeOptions;
+  /** Legacy v0.1 teaching seam retained for compatibility. */
   contextTransform?: ContextTransform;
 }
 
@@ -33,6 +37,7 @@ export class Agent {
       cwd: string;
       maxTurns: number;
       session: SessionStore | undefined;
+      contextRuntime: ContextRuntime | undefined;
       contextTransform: ContextTransform;
     },
     state: AgentState,
@@ -43,6 +48,10 @@ export class Agent {
   }
 
   static async create(options: AgentOptions): Promise<Agent> {
+    if (options.context && options.contextTransform) {
+      throw new Error("AgentOptions.context and contextTransform are mutually exclusive");
+    }
+
     const previousMessages = options.session ? await options.session.load() : [];
     const state: AgentState = {
       systemPrompt: options.systemPrompt ?? "You are a precise, helpful agent.",
@@ -58,6 +67,7 @@ export class Agent {
         cwd: options.cwd ?? process.cwd(),
         maxTurns: options.maxTurns ?? 24,
         session: options.session,
+        contextRuntime: options.context ? new ContextRuntime(options.context) : undefined,
         contextTransform: options.contextTransform ?? new IdentityContextTransform()
       },
       state,
@@ -102,6 +112,7 @@ export class Agent {
           steering: this.steering,
           followups: this.followups,
           session: this.options.session,
+          contextRuntime: this.options.contextRuntime,
           contextTransform: this.options.contextTransform,
           cwd: this.options.cwd,
           maxTurns: this.options.maxTurns
