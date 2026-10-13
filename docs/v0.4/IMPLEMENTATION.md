@@ -12,24 +12,25 @@ Do not skip ahead to activation before discovery/loading contracts are stable.
 
 ---
 
-## v0.4.1 — Skill manifest parser + core types ← next
+## v0.4.1 — Skill manifest parser + core types ✅ implemented
 
 ### Goal
 
 Define the smallest valid Skill document and parse it deterministically without filesystem discovery or Agent integration.
 
-### Add
+### Implemented
 
 ```text
 src/skills/types.ts
 src/skills/errors.ts
 src/skills/manifest-parser.ts
 src/skills/index.ts
+src/index.ts
 
 tests/skill-manifest.test.ts
 ```
 
-### Contracts
+### Public contracts
 
 ```ts
 interface SkillManifest {
@@ -42,26 +43,68 @@ interface ParsedSkillDocument {
   manifest: SkillManifest;
   instructions: string;
 }
+
+function parseSkillDocument(source: string): ParsedSkillDocument;
 ```
 
 ### Parser rules
 
-- frontmatter required;
-- `name` required and non-empty;
-- `description` required and non-empty;
-- body/instructions required and non-empty;
-- simple scalar metadata preserved;
-- duplicate reserved keys rejected;
-- malformed frontmatter rejected with `InvalidSkillManifestError`;
-- parsing is deterministic and side-effect free.
+- `SKILL.md` must begin with a frontmatter `---` delimiter;
+- closing `---` delimiter is required;
+- `name` is required and non-empty;
+- `description` is required and non-empty;
+- Markdown instructions/body are required and non-empty;
+- unknown top-level scalar keys are preserved in `manifest.metadata`;
+- duplicate reserved and custom keys are rejected rather than silently overwritten;
+- blank lines and comment lines are allowed inside frontmatter;
+- UTF-8 BOM and CRLF/CR line endings are normalized;
+- single- and double-quoted scalar values are supported;
+- array/object/block/nested YAML syntax is deliberately rejected in v0.4.1;
+- malformed input fails with `InvalidSkillManifestError` and line provenance when available;
+- parsing is deterministic, dependency-free, and side-effect free.
 
-### Non-goals
+### Explicit boundary
 
-No filesystem scanning, registry, loader, activation, context injection.
+v0.4.1 parses strings only. It does not:
+
+- inspect the filesystem;
+- discover Skill roots;
+- create descriptors;
+- load a selected Skill package;
+- register or activate Skills;
+- modify context or Agent behavior;
+- execute scripts or references.
+
+### Verification performed
+
+The new source subset passed TypeScript checking under:
+
+```text
+strict
+noUncheckedIndexedAccess
+exactOptionalPropertyTypes
+```
+
+Runtime smoke verified:
+
+```text
+BOM + CRLF document
+quoted name/description
+custom owner metadata
+→ parsed deterministically
+
+duplicate name
+→ InvalidSkillManifestError
+
+list metadata such as [a, b]
+→ explicitly rejected
+```
+
+The full repository Vitest suite is not claimed as run in the current execution environment.
 
 ---
 
-## v0.4.2 — ProjectSkillSource + SkillRegistry
+## v0.4.2 — ProjectSkillSource + SkillRegistry ← next
 
 ### Goal
 
@@ -294,7 +337,7 @@ next run has catalog but no active code-review body
 
 ## Final Definition of Done
 
-- [ ] manifest parser and typed errors
+- [x] manifest parser and typed errors
 - [ ] descriptor/discovery contracts
 - [ ] deterministic SkillRegistry
 - [ ] safe on-demand SkillLoader
