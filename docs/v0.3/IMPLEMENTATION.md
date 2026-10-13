@@ -2,7 +2,7 @@
 
 This document defines the staged implementation order for `v0.3`.
 
-The branch must preserve one dominant mental model:
+Primary invariant:
 
 > Durable session history remains complete; model-visible context is a budgeted projection.
 
@@ -14,9 +14,9 @@ Do not skip ahead to summarization or AgentLoop integration before lower-level c
 
 ### Goal
 
-Make context capacity explicit before introducing selection or compaction policy.
+Make model-input capacity explicit before introducing selection or compaction policy.
 
-### Implemented files
+### Implemented
 
 ```text
 src/context/budget.ts
@@ -26,27 +26,6 @@ src/context/index.ts
 
 tests/context-budget.test.ts
 tests/token-estimator.test.ts
-```
-
-### Core contracts
-
-```ts
-interface ContextBudget {
-  contextWindow: number;
-  outputReserve: number;
-  safetyMargin: number;
-}
-
-interface ResolvedContextBudget extends ContextBudget {
-  inputBudget: number;
-}
-
-interface TokenEstimator {
-  estimateText(text: string): number;
-  estimateSystem(text: string): number;
-  estimateMessage(message: AgentMessage): number;
-  estimateMessages(messages: readonly AgentMessage[]): number;
-}
 ```
 
 ### Invariants
@@ -59,39 +38,33 @@ contextWindow
 - safetyMargin
 ```
 
-- all budget components are non-negative integers;
-- `contextWindow` must be positive;
-- reserves must leave a positive input budget;
-- overflow is represented by `ContextBudgetExceededError`;
-- approximate estimation is deterministic and network independent;
-- tool-call metadata contributes to the estimate;
-- this stage does not mutate AgentLoop behavior.
-
-### Verification performed in the implementation environment
-
-- strict TypeScript subset compile passed with `strict`, `noUncheckedIndexedAccess`, and `exactOptionalPropertyTypes`;
-- runtime smoke check verified `128000 - 12000 - 4000 = 112000`;
-- runtime smoke check verified overflow error fields;
-- runtime smoke check verified deterministic prepared-input estimation.
-
-The full repository Vitest suite is not claimed as run because dependency installation/network access was unavailable in the execution environment.
+- deterministic, network-independent estimation;
+- invalid budgets fail explicitly;
+- tool-call metadata contributes to estimation;
+- no AgentLoop behavior change yet.
 
 ---
 
-## v0.3.2 — ContextUnitBuilder + ToolExchange atomicity ← next
+## v0.3.2 — ContextUnitBuilder + ToolExchange atomicity ✅ implemented
 
 ### Goal
 
-Stop treating raw messages as independently discardable context items.
+Stop treating every raw message as an independently discardable context item.
 
-### Add
+### Implemented
 
 ```text
 src/context/units.ts
 tests/context-units.test.ts
 ```
 
-### Target model
+Additional error:
+
+```text
+InvalidContextHistoryError
+```
+
+### Data model
 
 ```ts
 type ContextUnit =
@@ -100,7 +73,7 @@ type ContextUnit =
   | ToolExchangeContextUnit;
 ```
 
-A tool exchange must group:
+A tool exchange groups:
 
 ```text
 AssistantMessage(toolCalls)
@@ -108,26 +81,69 @@ AssistantMessage(toolCalls)
 matching ToolResultMessage(s)
 ```
 
+### Implemented semantics
+
+Valid complete exchange:
+
+```text
+Assistant(call_a, call_b)
+ToolResult(call_b)
+ToolResult(call_a)
+
+→ one ToolExchangeContextUnit
+→ complete = true
+```
+
+Valid trailing in-progress exchange:
+
+```text
+Assistant(call_a, call_b)
+ToolResult(call_a)
+<end history>
+
+→ complete = false
+→ missingToolCallIds = [call_b]
+```
+
+Invalid history:
+
+- orphan tool result;
+- unknown tool-call id inside an open exchange;
+- duplicate tool-call id;
+- duplicate result;
+- mismatched `toolName`;
+- user/assistant message before an exchange completes.
+
 ### Core invariant
 
-If a tool call is present in prepared model context, its matching result must not be silently removed merely because a raw message cutoff crossed the exchange boundary.
+> Context selection must never split a complete tool exchange merely because a raw-message boundary crosses it.
 
-### Failure cases to define
+### Round trip
 
-- orphan `ToolResultMessage`;
-- duplicate result for one tool-call id;
-- assistant declares multiple tool calls but only some results are present;
-- interleaved non-tool message before exchange completion.
+For valid history:
 
-Decide explicitly which cases are invalid history and which represent an in-progress exchange.
+```text
+flattenContextUnits(buildContextUnits(history))
+==
+history
+```
+
+### Verification
+
+- strict TypeScript source checking passed;
+- test source passed TypeScript checking with a temporary Vitest type shim;
+- runtime smoke verified trailing partial exchange metadata;
+- runtime smoke verified interleaved non-tool history is rejected.
+
+The full Vitest suite is not claimed as run in the current environment.
 
 ---
 
-## v0.3.3 — ToolResultReducer
+## v0.3.3 — ToolResultReducer ← next
 
 ### Goal
 
-Reduce oversized environment observations only in model-visible context.
+Reduce oversized environment observations only in model-visible context while preserving durable source messages unchanged.
 
 ### Add
 
@@ -138,7 +154,7 @@ tests/tool-result-reducer.test.ts
 
 ### Reference policy
 
-Use explicit head/tail reduction:
+Use explicit deterministic head/tail reduction:
 
 ```text
 [tool result reduced for model context]
@@ -154,13 +170,27 @@ kept_tail_chars=...
 ...
 ```
 
+### Required contracts
+
+Likely shape:
+
+```ts
+interface ToolResultReducer {
+  reduce(message: ToolResultMessage): ToolResultMessage;
+}
+```
+
+The implementation may use an options object for thresholds and head/tail sizes.
+
 ### Invariants
 
-- durable source message remains unchanged;
+- original durable message is never mutated;
+- small results are returned unchanged or semantically identical;
 - reduction is explicit, never silent;
-- small results are returned unchanged;
 - reduction is deterministic;
-- reduced content remains associated with the original tool-call identity.
+- `toolCallId`, `toolName`, `isError`, and timestamp identity remain intact;
+- reduced content remains traceable to original size;
+- no AgentLoop integration yet.
 
 ---
 
@@ -168,7 +198,7 @@ kept_tail_chars=...
 
 ### Goal
 
-Create the first real planner that produces provider-facing context under a budget.
+Create the first planner that produces provider-facing context under a budget.
 
 ### Add
 
@@ -198,17 +228,19 @@ interface ContextPlanner {
 
 ### Policy
 
-Start from newest complete context units and walk backward until the input budget is filled.
-
-Do not summarize yet.
+- build causal context units;
+- start from newest complete units;
+- walk backward until the resolved input budget is filled;
+- use ToolResultReducer for oversized observations;
+- do not summarize yet.
 
 ### Invariants
 
-- prepared context fits resolved input budget;
+- prepared context fits budget;
 - system prompt is never silently truncated;
-- unit boundaries are preserved;
+- complete causal unit boundaries are preserved;
 - durable history is never mutated;
-- provenance explains what was selected/reduced/omitted.
+- provenance explains selection/reduction/omission.
 
 ---
 
@@ -228,7 +260,7 @@ tests/context-summary.test.ts
 tests/summary-store.test.ts
 ```
 
-### Suggested summary shape
+Suggested shape:
 
 ```ts
 interface ContextSummary {
@@ -242,10 +274,9 @@ interface ContextSummary {
 
 ### Invariants
 
-- a summary declares exactly what history range it covers;
-- summary persistence is separate from raw session persistence;
-- summaries never delete source history;
-- summaries can be replaced by newer checkpoints without rewriting history.
+- summary has explicit identity and coverage;
+- summary never replaces/deletes durable history;
+- deterministic fake summarizers can test the mechanism offline.
 
 ---
 
@@ -253,7 +284,15 @@ interface ContextSummary {
 
 ### Goal
 
-Add progressive compaction without repeatedly summarizing the entire session.
+Compact old history incrementally instead of repeatedly summarizing the entire log.
+
+### Progression
+
+```text
+messages 0..100 → S1
+S1 + messages 101..170 → S2
+S2 + messages 171..240 → S3
+```
 
 ### Add
 
@@ -265,98 +304,68 @@ tests/progressive-compaction.test.ts
 tests/context-cancellation.test.ts
 ```
 
-### Target progression
+### Invariants
 
-```text
-messages 0..100 → S1
-S1 + messages 101..170 → S2
-S2 + messages 171..240 → S3
-```
-
-### Requirements
-
-- deterministic fake summarizer for tests;
-- optional LLM-backed summarizer adapter may be added only behind `ContextSummarizer`;
-- cancellation must propagate through summary generation;
-- summary failure must not corrupt durable history or replace the last valid checkpoint.
+- existing checkpoint coverage is respected;
+- only newly covered history is added to the next summary step;
+- cancellation propagates into summarization;
+- durable history remains complete.
 
 ---
 
-## v0.3.7 — AgentLoop integration + context events + examples
+## v0.3.7 — AgentLoop integration + events + examples
 
 ### Goal
 
-Make the Agent use `ContextPlanner` while retaining complete runtime/session history.
+Replace the teaching-only context seam with the completed planner contract at the model-call boundary.
 
-### Refactor target
+### Integration model
 
 ```text
-state.messages
+Agent state.messages
       │
-      ├──► SessionStore: full history
+      ├──────────────► SessionStore / durable truth
       │
-      └──► ContextPlanner
-               ↓
-         PreparedContext
-               ↓
-          LLMProvider
+      └── ContextPlanner.prepare()
+                 ↓
+          PreparedContext
+                 ↓
+            LLMProvider
 ```
 
-### Required integration proof
-
-For a long scripted run:
+### Must prove
 
 ```text
-agent.state.messages.length
->
-provider-visible messages.length
+providerContext.length
+<
+durableHistory.length
 ```
 
-while SessionStore still contains the complete message sequence.
+when compaction is needed, while durable history remains unchanged.
 
-### Add events
-
-Potential event vocabulary:
+### Add/update
 
 ```text
-context_prepare_start
-context_prepared
-context_reduced
-context_compaction_start
-context_compaction_end
-context_compaction_error
+src/core/agent-loop.ts
+src/core/agent.ts
+src/core/events.ts
+examples/07-context-compaction.ts
+tests/agent-context-integration.test.ts
 ```
 
-Do not expose strategy-specific internals as permanent public events unless needed.
+### Final Definition of Done
 
-### Example
+- [x] budget and estimator primitives
+- [x] causal context units
+- [ ] explicit tool-result reduction
+- [ ] budgeted planner
+- [ ] summary checkpoints
+- [ ] progressive compaction
+- [ ] cancellation semantics
+- [ ] AgentLoop integration
+- [ ] context lifecycle events
+- [ ] deterministic integration tests
+- [ ] educational example
+- [ ] package/version/docs finalization
 
-Add a deterministic long-session example demonstrating:
-
-1. history grows;
-2. provider context remains bounded;
-3. large tool output is reduced;
-4. old work becomes represented by a summary checkpoint;
-5. raw JSONL history remains complete.
-
----
-
-# Completion order
-
-```text
-0.3.1 ✅
-  ↓
-0.3.2 ← next
-  ↓
-0.3.3
-  ↓
-0.3.4
-  ↓
-0.3.5
-  ↓
-0.3.6
-  ↓
-0.3.7
-```
-
-No later stage should be considered complete until its own unit/invariant tests exist.
+Only after all applicable items pass should `v0.3` be frozen as a historical learning snapshot.
