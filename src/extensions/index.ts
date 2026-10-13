@@ -1,8 +1,17 @@
 export {
+  DuplicateExtensionError,
+  ExtensionApiClosedError,
   ExtensionError,
   ExtensionHookError,
-  InvalidHookRegistrationError
+  ExtensionSetupError,
+  InvalidExtensionDefinitionError,
+  InvalidHookRegistrationError,
+  UnknownExtensionError
 } from "./errors.js";
+export {
+  type ExtensionAPI,
+  ScopedExtensionAPI
+} from "./api.js";
 export {
   type AfterModelEvent,
   type AfterRunEvent,
@@ -27,4 +36,15 @@ export {
   type HookRegistrationOwner,
   type RunStatus
 } from "./hooks.js";
+export {
+  ExtensionHost,
+  normalizeExtensionName,
+  type ExtensionHostOptions
+} from "./host.js";
 export { HookPipeline } from "./pipeline.js";
+export { ExtensionRegistrationSet } from "./registrations.js";
+export {
+  cloneLoadedExtension,
+  type ExtensionDefinition,
+  type LoadedExtension
+} from "./types.js";
