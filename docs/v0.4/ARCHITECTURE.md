@@ -1,77 +1,81 @@
-# v0.4 Skills Architecture
+# v0.4 Skills Architecture — Implemented Snapshot
 
 ## 1. Objective
 
-v0.4 answers one architectural question:
+v0.4 answers one question:
 
 ```text
 How can an Agent gain task-specific workflow knowledge
-without hard-coding that workflow into the runtime?
+without hard-coding workflows into runtime execution mechanics?
 ```
 
-Answer:
+Implemented answer:
 
 ```text
 Skill package
    ↓
-discovery
+descriptor discovery
    ↓
-compact descriptor catalog
+compact catalog
    ↓
-on-demand loading
+on-demand safe loading
    ↓
 run-scoped activation
    ↓
-budgeted context material
+budgeted ContextSupplement
 ```
 
-The runtime remains responsible for execution. Skills remain responsible for guidance.
+A Skill teaches. Tools execute. Extensions in v0.5 will customize runtime behavior.
 
 ---
 
-## 2. Layering
+## 2. Final layering
 
 ```text
-Application / CLI
-      │
-      ▼
-Skill activation request
-      │
-      ▼
-Skill subsystem
-  ┌───┼───────────────┐
-  ▼   ▼               ▼
-Source Registry     Loader
-  │      │             │
-  └──────┴──────┬──────┘
-                ▼
-         ActiveSkillStore
-                │
-                ▼
-        Context supplements
-                │
-                ▼
-          ContextRuntime
-                │
-                ▼
-           AgentLoop
+Agent
+ │
+ ├── ToolRegistry ─────────────── load_skill Tool
+ │                                  │
+ │                                  ▼
+ │                         SkillActivationService
+ │                                  │
+ │                         ┌────────┴────────┐
+ │                         ▼                 ▼
+ │                    SkillRegistry      SkillLoader
+ │                         │                 │
+ │                         └────────┬────────┘
+ │                                  ▼
+ │                           ActiveSkillStore
+ │                                  │
+ │                                  ▼
+ │                        active Skill supplements
+ │
+ ├── SkillRuntime
+ │      ├── compact catalog supplement
+ │      └── active Skill supplements
+ │
+ └── ContextRuntime
+        ↓
+    ContextPlanner
+        ↓
+   PreparedContext
+        ↓
+    LLMProvider
 ```
 
-Forbidden dependencies:
+The concrete Skill subsystem does not belong inside `runAgentLoop()`.
 
-```text
-Skill parser -> AgentLoop
-Skill registry -> provider HTTP
-Skill loader -> shell execution
-Skill discovery -> script execution
-AgentLoop -> concrete Skill names
+The loop only receives:
+
+```ts
+contextSupplements?: () => readonly ContextSupplement[]
 ```
+
+That generic seam can later serve other model-only context producers.
 
 ---
 
-## 3. Data model
-
-### SkillManifest
+## 3. Core data model
 
 ```ts
 interface SkillManifest {
@@ -79,11 +83,7 @@ interface SkillManifest {
   description: string;
   metadata?: Record<string, string>;
 }
-```
 
-### SkillDescriptor
-
-```ts
 interface SkillDescriptor {
   name: string;
   description: string;
@@ -91,228 +91,134 @@ interface SkillDescriptor {
   manifestPath: string;
   metadata?: Record<string, string>;
 }
-```
 
-Descriptor properties:
-
-- cheap to keep in memory;
-- enough for catalog rendering;
-- no full instructions;
-- no executable callback;
-- immutable after registration.
-
-### LoadedSkill
-
-```ts
 interface LoadedSkill {
   descriptor: SkillDescriptor;
   instructions: string;
 }
 ```
 
-A loaded Skill is still data. Loading must not execute scripts.
-
-### ActiveSkill
-
-```ts
-interface ActiveSkill {
-  skill: LoadedSkill;
-  activatedAtTurn: number;
-}
-```
-
-Activation state belongs to one Agent run in v0.4.
+There is intentionally no separate mutable `ActiveSkill` object in v0.4. Run-scoped active state is represented by `ActiveSkillStore<LoadedSkill>` semantics.
 
 ---
 
-## 4. Parser boundary
-
-`SkillManifestParser` owns only text parsing/validation:
+## 4. Progressive disclosure
 
 ```text
-raw SKILL.md
-    ↓
-frontmatter parser
-    ↓
-validated manifest + body
+Level 0
+SkillDescriptor
+name + description
+
+Level 1
+LoadedSkill.instructions
+selected SKILL.md only
+
+Level 2
+references/*
+ordinary explicit file-tool reads
+
+Level 3
+scripts/assets/templates
+ordinary explicit tool paths
 ```
 
-It does not know:
+This means:
 
 ```text
-filesystem discovery
-Agent state
-context budget
-activation
-shell execution
+100 discovered Skills
+!=
+100 loaded Skill bodies
+!=
+100 bodies in model context
 ```
-
-Recommended result:
-
-```ts
-interface ParsedSkillDocument {
-  manifest: SkillManifest;
-  instructions: string;
-}
-```
-
-Parsing must be deterministic and network-free.
 
 ---
 
-## 5. Discovery boundary
+## 5. Discovery
 
-```ts
-interface SkillSource {
-  discover(context: SkillDiscoveryContext): Promise<SkillDescriptor[]>;
-}
-```
-
-Reference `ProjectSkillSource` searches:
+Reference location:
 
 ```text
 <cwd>/.mini-pi/skills/*/SKILL.md
 ```
 
-Discovery does:
-
-```text
-locate file
-read enough manifest metadata
-validate
-return descriptor
-```
+`ProjectSkillSource` scans one child-directory level and returns descriptors only.
 
 Discovery does not:
 
 ```text
-load references
-load scripts
-activate Skill
-execute anything
+activate Skills
+traverse references
+execute scripts
 inject context
 ```
 
----
-
-## 6. Registry boundary
-
-```ts
-class SkillRegistry {
-  register(descriptor: SkillDescriptor): void;
-  replace?(descriptor: SkillDescriptor): void; // only if later justified
-  get(name: string): SkillDescriptor | undefined;
-  list(): readonly SkillDescriptor[];
-}
-```
-
-v0.4 reference policy:
-
-```text
-duplicate normalized name => DuplicateSkillError
-```
-
-No silent override.
-
-Ordering should be deterministic by normalized name unless source precedence is explicitly required.
+A missing Skill root means an empty catalog.
 
 ---
 
-## 7. Loader boundary
+## 6. Registry
 
-```ts
-interface SkillLoader {
-  load(descriptor: SkillDescriptor, signal: AbortSignal): Promise<LoadedSkill>;
-}
-```
+`SkillRegistry` owns descriptor identity.
 
-Loader responsibilities:
+Normalization:
 
 ```text
-resolve manifest path under root
-read SKILL.md
-parse again
-verify manifest identity
-return full instructions
+trim + lowercase
 ```
 
-Loader does not preload:
+Therefore case/outer-whitespace variants are the same identity.
 
-```text
-references/*
-scripts/*
-assets/*
-```
+Duplicate normalized names fail with `DuplicateSkillError` rather than using source order as hidden precedence.
 
-This is critical to progressive disclosure.
+Registry list/get operations return copies.
 
 ---
 
-## 8. Path safety
+## 7. Safe on-demand loading
 
-Skill package root:
+`FilesystemSkillLoader` loads exactly one selected `SKILL.md`.
 
-```text
-/root/to/code-review
-```
-
-Allowed Skill-local helper path:
+Validation layers:
 
 ```text
-references/security.md
-→ /root/to/code-review/references/security.md
+1. root is absolute
+2. manifestPath is absolute
+3. manifest remains lexically under root
+4. manifestPath == root/SKILL.md
+5. root is a real directory, not a symlink
+6. manifest is a real regular file, not a symlink
+7. realpath(manifest) remains under realpath(root)
+8. canonical manifest == canonical-root/SKILL.md
+9. parsed manifest name matches descriptor normalized identity
 ```
 
-Rejected:
-
-```text
-../../outside.txt
-```
-
-Any Skill-specific resolver must prove:
-
-```text
-resolvedPath is inside descriptor.root
-```
-
-General workspace tools keep their existing workspace-root policy.
+It does not preload optional package resources.
 
 ---
 
-## 9. Catalog architecture
+## 8. Catalog and active context
 
-Catalog renderer input:
-
-```text
-SkillDescriptor[]
-```
-
-Output:
+Catalog representation exposes only:
 
 ```text
-compact deterministic string
+name
+description
 ```
 
-It must never require loading full Skill bodies.
-
-Recommended representation:
+Never:
 
 ```text
-<available_skills>
-<skill name="code-review">...</skill>
-<skill name="release">...</skill>
-</available_skills>
+instructions
+root
+manifestPath
+metadata
+reference/script contents
 ```
 
-The renderer must escape representation-sensitive content.
+Selected `LoadedSkill` bodies are rendered as `active-skill` supplements.
 
----
-
-## 10. Context supplements
-
-v0.4 should generalize model-visible non-message context into explicit supplements.
-
-Conceptual type:
+Generic contract:
 
 ```ts
 interface ContextSupplement {
@@ -323,195 +229,174 @@ interface ContextSupplement {
 }
 ```
 
-Possible future kinds:
+Supplements are model-only context artifacts:
 
 ```text
-extension context
-MCP prompt/resource
-project instructions
+ContextSupplement != AgentMessage
 ```
-
-But v0.4 implements only Skill-related kinds.
-
-Supplements must enter before final budget verification.
 
 ---
 
-## 11. Budget semantics
+## 9. Budget integration
 
-Context budget now contains several classes of model-visible material:
+Composition order:
 
 ```text
 base system prompt
+      ↓
 summary checkpoint
-Skill catalog
-active Skill bodies
-recent durable messages
+      ↓
+normalized ContextSupplement[]
+      ↓
+ContextPlanner.prepare()
+      ↓
+PreparedContext
 ```
 
-Reference priority policy for v0.4:
+No Skill text is appended after planning.
 
-```text
-required base system                  mandatory
-active Skill instructions            mandatory once activated
-compact catalog                      mandatory while Skills enabled
-summary checkpoint                   existing v0.3 behavior
-recent causal message tail           existing planner behavior
-```
-
-If required Skill material makes the request impossible, fail explicitly with a context-budget error. Do not silently drop an already activated Skill body.
+The v0.4 reference policy treats supplied supplements as mandatory. If they make the system material exceed the resolved input budget, the runtime raises `ContextBudgetExceededError`.
 
 ---
 
-## 12. Activation architecture
+## 10. Activation
 
-`load_skill` adapter:
-
-```text
-ToolCall load_skill(name)
-        ↓
-SkillActivationTool
-        ↓
-registry.get(name)
-        ↓
-loader.load(descriptor)
-        ↓
-activeStore.activate(...)
-        ↓
-ToolResult("Skill 'code-review' activated")
-```
-
-The full Skill body is not returned as an unbudgeted giant ToolResult. Its primary role is run-scoped activation state consumed by the next context preparation.
-
-This avoids duplicating the full Skill text both as a ToolResult and as active context.
-
----
-
-## 13. Activation lifetime
-
-At `agent_start`:
-
-```text
-ActiveSkillStore.clear()
-```
-
-During run:
-
-```text
-activate code-review
-activate code-review again
-→ one active record
-```
-
-At run end/error:
-
-```text
-clear active bodies
-```
-
-Descriptor catalog remains available across runs because it is discovery state, not activation state.
-
----
-
-## 14. Explicit activation
-
-Manual activation such as:
-
-```text
-/skill:code-review
-```
-
-must call the same activation service/store used by `load_skill`.
-
-Architecture:
-
-```text
-CLI explicit activation ─┐
-                        ├─► SkillActivationService
-model load_skill call ──┘
-```
-
-Do not duplicate activation semantics in CLI and tool code.
-
----
-
-## 15. Events
-
-Events remain observational:
-
-```text
-skill_discovery_start
-skill_discovery_end
-skill_activation_start
-skill_activated
-skill_activation_error
-skill_context_prepared
-```
-
-No event listener may be required for correctness.
-
-Useful metadata:
-
-```text
-runId
-turn
-skillName
-activeSkillCount
-catalogSkillCount
-estimatedSkillTokens
-```
-
-Avoid emitting full instructions.
-
----
-
-## 16. Error model
+Active store:
 
 ```ts
-class SkillError extends Error {}
-class InvalidSkillManifestError extends SkillError {}
-class DuplicateSkillError extends SkillError {}
-class SkillNotFoundError extends SkillError {}
-class SkillPathError extends SkillError {}
-class SkillLoadError extends SkillError {}
+interface ActiveSkillStore {
+  list(): readonly LoadedSkill[];
+  get(name: string): LoadedSkill | undefined;
+  activate(skill: LoadedSkill): LoadedSkill;
+  clear(): void;
+}
 ```
 
-Errors should identify Skill name/path where safe and useful.
+Reference semantics:
+
+```text
+normalized-name idempotency
+first active body wins for the current run
+clone-on-read/write
+explicit clear()
+```
+
+Shared service:
+
+```text
+requested name
+      ↓
+ActiveSkillStore
+      ↓ not active
+SkillRegistry
+      ↓
+SkillLoader
+      ↓
+post-load active re-check
+      ↓
+ActiveSkillStore.activate
+```
+
+Both model-driven and manual activation use this service.
 
 ---
 
-## 17. Core invariants
+## 11. `load_skill`
+
+Model-driven activation reuses the existing Tool protocol:
 
 ```text
-1. Skills never require a Skill-name branch in AgentLoop
-2. discovery never executes package code
-3. loading one Skill does not recursively load all package resources
-4. descriptor catalog remains compact
-5. duplicate names fail explicitly
-6. activated Skill bodies are run-scoped
-7. repeat activation is idempotent
-8. Skill context participates in v0.3 budgeting
-9. Skill activation never rewrites durable history
-10. scripts use ordinary tools
-11. full instructions are not exposed until activation
-12. deterministic tests do not require a provider/network
+LLM ToolCall
+   ↓
+load_skill(name)
+   ↓
+SkillActivationService
+   ↓
+compact ToolResult
 ```
+
+Example ToolResult:
+
+```text
+Skill 'code-review' activated.
+```
+
+The ToolResult never contains full instructions. The body appears on the next model turn through `ActiveSkillStore → ContextSupplement`.
 
 ---
 
-## 18. Future compatibility
+## 12. Run scope
 
-v0.4 should prepare for:
+`Agent.create()` discovers project Skills once and builds the catalog/runtime.
+
+`Agent.prompt()` owns active lifetime:
 
 ```text
-v0.5 Extensions
-  executable lifecycle customization
+prompt start
+→ clear active store
 
-v0.6 MCP
-  remote tools/resources/prompts can become other catalog/context sources
+turns
+→ Skills may activate and remain active
 
-v0.8 Permission policy
-  Skill-provided scripts remain subject to ordinary execution mediation
+prompt finally
+→ clear active store
 ```
 
-It must not implement those versions early.
+This prevents cross-prompt active-body leakage while keeping project discovery stable.
+
+---
+
+## 13. Events
+
+Skill lifecycle:
+
+```text
+skill_activation_start
+skill_activated
+skill_activation_reused
+skill_activation_failed
+```
+
+Origins:
+
+```text
+api | manual | tool
+```
+
+Events contain metadata, never full instructions.
+
+`SkillEventBus` isolates observer failures. `Agent` bridges Skill events into the normal Agent event stream with `runId` and `turn` when activation happens inside a run.
+
+---
+
+## 14. Reference/script boundary
+
+Skills do not introduce hidden execution channels.
+
+```text
+references/foo.md
+→ ordinary read/file ToolCall
+
+scripts/check.mjs
+→ ordinary explicit execution ToolCall
+```
+
+This keeps later permission/sandbox policy in the ordinary intent → execution path.
+
+---
+
+## 15. Architectural invariants
+
+```text
+Skill != Tool
+Skill != Extension
+
+discover != load
+load != activate
+activate != execute
+
+available knowledge != model-visible context
+model-visible Skill context != durable history
+```
+
+Those invariants define the frozen v0.4 learning snapshot.
