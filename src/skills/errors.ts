@@ -47,10 +47,21 @@ export class SkillIdentityMismatchError extends SkillError {
 
   constructor(expectedName: string, actualName: string, manifestPath: string) {
     super(
-      `skill identity changed while loading '${manifestPath}': expected '${expectedName}', actual '${actualName}'`
+      `skill identity changed while loading '${manifestPath}': expected '${expectedName}', found '${actualName}'`
     );
     this.expectedName = expectedName;
     this.actualName = actualName;
     this.manifestPath = manifestPath;
   }
 }
+
+export class UnknownSkillError extends SkillError {
+  readonly requestedName: string;
+
+  constructor(requestedName: string) {
+    super(`unknown skill '${requestedName}'`);
+    this.requestedName = requestedName;
+  }
+}
+
+export class InvalidSkillActivationError extends SkillError {}
