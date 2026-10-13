@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.3.2
+
+- Added `ContextUnit` modeling for user, assistant, and tool-exchange history.
+- Added `buildContextUnits()` and `flattenContextUnits()`.
+- Grouped assistant tool calls with their matching tool results as one causal context unit.
+- Added explicit support for trailing in-progress tool exchanges with `complete=false` and `missingToolCallIds`.
+- Added `InvalidContextHistoryError` for orphan, duplicate, mismatched, or interleaved tool history.
+- Added tests for causal atomicity and invalid-history failure cases.
+- Kept AgentLoop unchanged; planner integration remains for later v0.3 stages.
+
 ## v0.3.1
 
 - Added explicit `ContextBudget` and resolved input-budget calculation.
