@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.4.4
+
+- Added generic `ContextSupplement` model-only context material with deterministic validation/rendering.
+- Added `InvalidContextSupplementError` for duplicate ids, invalid ids, unsupported kinds, and empty supplement content.
+- Added compact Skill catalog rendering that exposes only descriptor `name` + `description`, never paths, metadata, or full instructions.
+- Added `createSkillCatalogSupplement()` and `createLoadedSkillSupplement()` to convert Level-0 catalog data and one selected Level-1 Skill body into context supplements.
+- Added deterministic supplement ids through `skillSupplementId()`, keeping safe names readable and using collision-safe UTF-8 hex for other names.
+- Updated `ContextRuntimePrepareInput` with optional `supplements` and rendered supplements into system material before `ContextPlanner.prepare()`.
+- Kept summary checkpoints and Skill supplements as model-only derived context rather than durable `AgentMessage`s.
+- The v0.4.4 reference runtime does not silently drop supplied supplements; supplement-driven budget overflow raises `ContextBudgetExceededError`.
+- Added catalog tests for deterministic order, descriptor-only rendering, escaping, empty catalogs, active body supplements, and safe ids.
+- Added context-supplement tests for ordering, validation, summary coexistence, durable-history immutability, budget accounting, and explicit overflow.
+- Strict TypeScript source-subset checking and context runtime smoke passed; the full repository Vitest suite is not claimed as run in the current execution environment.
+
 ## v0.4.3
 
 - Added `LoadedSkill` and `SkillLoader` contracts plus the reference `FilesystemSkillLoader`.
@@ -81,7 +95,7 @@
 - Added `ContextPlanner`, `ContextPlannerInput`, `PreparedContext`, and structured `ContextProvenance`.
 - Added `KeepRecentContextPlanner` as the first budgeted model-context construction policy.
 - Composed context units, tool-result reduction, token estimation, and resolved budgets into one deterministic pipeline.
-- Selected a chronological contiguous suffix of the newest complete units under budget.
+- Selected a chronological contiguous suffix of complete units under budget.
 - Rejected incomplete trailing tool exchanges before provider-context preparation.
 - Failed explicitly when the system prompt or newest atomic unit cannot fit the resolved input budget.
 - Added reduction provenance for model-visible ToolResult projections while preserving durable history unchanged.
