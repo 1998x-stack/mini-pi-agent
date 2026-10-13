@@ -2,6 +2,7 @@ export {
   createLoadedSkillSupplement,
   createSkillCatalogSupplement,
   renderSkillCatalog,
+  skillSupplementId,
   SKILL_CATALOG_SUPPLEMENT_ID
 } from "./catalog.js";
 export {
