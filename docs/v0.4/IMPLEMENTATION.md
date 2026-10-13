@@ -18,188 +18,148 @@ Implemented the minimal `SkillManifest`, `ParsedSkillDocument`, typed manifest e
 
 ## v0.4.2 — ProjectSkillSource + SkillRegistry ✅ implemented
 
-Implemented descriptor-only project discovery from:
-
-```text
-<cwd>/.mini-pi/skills/*/SKILL.md
-```
-
-and deterministic `SkillRegistry` identity/order semantics.
+Implemented descriptor-only project discovery from `<cwd>/.mini-pi/skills/*/SKILL.md` and deterministic normalized-name registry semantics.
 
 ---
 
 ## v0.4.3 — SkillLoader + root/path validation ✅ implemented
 
-Implemented safe on-demand loading of exactly one selected `SKILL.md`, including lexical and canonical path checks, symlink rejection, identity-drift detection, descriptor cloning, and cancellation propagation.
+Implemented safe on-demand loading of exactly one selected `SKILL.md`, including lexical/canonical containment, symlink rejection, identity-drift detection, descriptor cloning, and cancellation propagation.
 
 ---
 
 ## v0.4.4 — Catalog renderer + context supplement seam ✅ implemented
 
+Implemented compact descriptor catalogs and active Skill context through generic `ContextSupplement[]` rendered before ContextPlanner budgeting.
+
+---
+
+## v0.4.5 — Run-scoped activation + `load_skill` adapter ✅ implemented
+
 ### Goal
 
-Expose compact Skill availability and selected Skill bodies through the same budget-accounted v0.3 context path.
+Allow model-driven Skill activation while reusing the ordinary ToolCall → ToolResult feedback loop without duplicating full Skill bodies into durable tool history.
 
 ### Implemented
 
 ```text
-src/skills/catalog.ts
-src/context/supplements.ts
-src/context/errors.ts
-src/context/runtime.ts
-src/context/index.ts
+src/skills/active-store.ts
+src/skills/activation-service.ts
+src/skills/load-skill-tool.ts
+src/skills/errors.ts
 src/skills/index.ts
 
-tests/skill-catalog.test.ts
-tests/context-supplements.test.ts
+tests/skill-activation.test.ts
+tests/load-skill-tool.test.ts
 ```
 
-### Generic context contract
+### Active state contract
 
 ```ts
-interface ContextSupplement {
-  id: string;
-  kind: "skill-catalog" | "active-skill";
-  content: string;
-  required: boolean;
+interface ActiveSkillStore {
+  list(): readonly LoadedSkill[];
+  get(name: string): LoadedSkill | undefined;
+  activate(skill: LoadedSkill): LoadedSkill;
+  clear(): void;
+}
+
+class InMemoryActiveSkillStore implements ActiveSkillStore
+```
+
+Reference semantics:
+
+- normalized identity is `trim + lowercase`;
+- repeated activation is idempotent;
+- first active body wins for the store lifetime;
+- `list()` is deterministic;
+- `get()` / `list()` / `activate()` return safe clones;
+- metadata is cloned rather than shared;
+- `clear()` is the explicit run-scope reset primitive.
+
+### Shared activation service
+
+```ts
+class SkillActivationService {
+  activate(name: string, signal: AbortSignal): Promise<SkillActivationResult>;
 }
 ```
 
-Context helpers:
+Flow:
+
+```text
+requested Skill name
+      ↓
+ActiveSkillStore.get()
+      ↓ not active
+SkillRegistry.get()
+      ↓
+SkillLoader.load()
+      ↓ async boundary
+ActiveSkillStore.get() again
+      ↓
+ActiveSkillStore.activate()
+```
+
+The second store check handles two activations that finish close together: once another call has committed active state, the later call returns `already-active` instead of incorrectly reporting first activation.
+
+Sequential repeated activation does not call the loader again.
+
+Unknown names fail through:
+
+```text
+UnknownSkillError
+```
+
+Cancellation is propagated before lookup/loading and after loader completion.
+
+### `load_skill` Tool adapter
 
 ```ts
-normalizeContextSupplements()
-renderContextSupplements()
+class LoadSkillTool implements Tool
 ```
 
-Validation requires:
+Tool schema:
 
-- non-empty, valid supplement ids;
-- unique ids;
-- supported kinds;
-- non-empty content;
-- deterministic ordering.
+```json
+{
+  "type": "object",
+  "properties": {
+    "name": { "type": "string" }
+  },
+  "required": ["name"],
+  "additionalProperties": false
+}
+```
 
-Reference order:
+Direct invalid calls also fail through:
 
 ```text
-skill-catalog first
-active-skill bodies next, ordered by id
+InvalidSkillActivationError
 ```
 
-Invalid supplements fail with:
+Compact ToolResult semantics:
 
 ```text
-InvalidContextSupplementError
+Skill 'code-review' activated.
+
+Skill 'code-review' is already active.
 ```
 
-### Skill catalog
+The adapter never returns full `SKILL.md` instructions.
 
-```ts
-renderSkillCatalog(descriptors)
-createSkillCatalogSupplement(descriptors)
-```
-
-The catalog renders only:
+Required data flow:
 
 ```text
-name
-description
+load_skill ToolResult
+→ compact durable acknowledgement only
+
+ActiveSkillStore
+→ LoadedSkill body
+→ createLoadedSkillSupplement()
+→ next ContextRuntime.prepare()
 ```
 
-and deliberately omits:
-
-```text
-instructions
-metadata
-root
-manifestPath
-package resources
-```
-
-This is the Level-0 progressive-disclosure representation.
-
-### Active Skill supplement
-
-```ts
-createLoadedSkillSupplement(loadedSkill)
-```
-
-produces one required `active-skill` supplement containing the selected Skill's Level-1 instructions.
-
-`skillSupplementId(name)` provides deterministic valid ids. Safe normalized names remain readable; names containing spaces or non-ASCII characters use collision-safe UTF-8 hex encoding.
-
-### ContextRuntime integration
-
-`ContextRuntimePrepareInput` now accepts:
-
-```ts
-supplements?: readonly ContextSupplement[];
-```
-
-Runtime composition is:
-
-```text
-base system prompt
-      ↓
-summary checkpoint
-      ↓
-context supplements
-      ↓
-ContextPlanner.prepare()
-      ↓
-final budget validation
-```
-
-This ordering is the central v0.4.4 invariant.
-
-Forbidden:
-
-```text
-planner.prepare(...)
-      ↓
-PreparedContext
-      ↓
-append Skill text afterwards   ❌
-```
-
-Required:
-
-```text
-Skill material
-      ↓
-ContextSupplement[]
-      ↓
-planner-visible system material
-      ↓
-budget accounting
-      ↓
-PreparedContext
-```
-
-### Current required semantics
-
-The v0.4.4 reference runtime does not silently drop any supplied supplement. Catalog and active bodies are therefore mandatory once supplied.
-
-The `required` field remains explicit policy metadata for future selection/degradation policies; it is not yet used to remove supplements.
-
-If supplement material makes the system prompt exceed budget:
-
-```text
-ContextBudgetExceededError
-```
-
-is raised explicitly.
-
-### Durable-history invariant
-
-```text
-ContextSupplement
-!=
-AgentMessage
-```
-
-Supplements and summary checkpoints are model-only derived context. They are never appended to durable history.
+This avoids duplicate full bodies in durable history and active model context.
 
 ### Verification performed
 
@@ -214,108 +174,97 @@ exactOptionalPropertyTypes
 Runtime smoke verified:
 
 ```text
-catalog + active Skill + stored summary
-→ rendered once into system context
-→ all included in estimator/planner budget
-→ only post-summary durable tail remains as messages
-→ durable history unchanged
+20KB full Skill body
+→ first activation loads once
+→ ToolResult length = 30 chars
+→ full body absent from ToolResult
+→ full body present in active-skill supplement
 
-oversized active supplement
-→ ContextBudgetExceededError
+second normalized activation
+→ status = already-active
+→ loader calls remain 1
+
+store reads
+→ clones
+
+clear()
+→ no active Skills
 ```
 
 The full repository Vitest suite is not claimed as run in the current execution environment.
 
 ---
 
-## v0.4.5 — Run-scoped activation + load_skill adapter ← next
+## v0.4.6 — References + events + manual activation surface ← next
 
 ### Goal
 
-Allow model-driven Skill activation while reusing the existing ToolCall → ToolResult feedback loop.
+Complete the observable Skill lifecycle while keeping references/scripts on ordinary tool paths and ensuring explicit/manual activation shares the same activation service as model-driven `load_skill`.
 
-### Add
-
-```text
-src/skills/active-store.ts
-src/skills/activation-service.ts
-src/skills/load-skill-tool.ts
-src/skills/errors.ts
-src/skills/index.ts
-
-tests/skill-activation.test.ts
-tests/load-skill-tool.test.ts
-```
-
-### Target contracts
-
-```ts
-interface ActiveSkillStore {
-  list(): readonly LoadedSkill[];
-  get(name: string): LoadedSkill | undefined;
-  activate(skill: LoadedSkill): void;
-  clear(): void;
-}
-```
-
-Reference behavior is run-scoped and idempotent by normalized Skill name.
-
-Activation service flow:
+### Add/update
 
 ```text
-requested name
-      ↓
-SkillRegistry.get()
-      ↓
-SkillLoader.load()
-      ↓
-ActiveSkillStore.activate()
-      ↓
-activation result
+src/core/events.ts
+src/skills/activation-service.ts or a thin explicit activation facade
+src/core/agent.ts only if a generic explicit activation entry point is needed
+examples/08-skill-manual-activation.ts
+
+tests/skill-events.test.ts
 ```
 
-Unknown Skill names must fail through a typed error rather than returning `undefined` deep inside tool execution.
+### Lifecycle event target
 
-### load_skill adapter
-
-Expose a small ordinary Tool:
+Events should expose metadata only, for example:
 
 ```text
-load_skill(name)
+skill_activation_start
+skill_activated
+skill_activation_reused
+skill_activation_failed
 ```
 
-The adapter reuses the existing agent action/observation loop.
+Do not emit full Skill instructions by default.
 
-Its ToolResult must remain compact, for example:
+### Explicit activation rule
+
+Manual activation must call the same:
 
 ```text
-Skill 'code-review' activated.
+SkillActivationService.activate()
 ```
 
-It must **not** return the full Skill instructions because those instructions are already supplied on the next model turn through `ContextSupplement`.
+used by `load_skill`.
+
+A second Skill runtime is forbidden.
+
+### References/scripts rule
+
+```text
+Skill instructions mention references/foo.md
+      ↓
+model uses ordinary read tool
+
+Skill instructions mention scripts/check.mjs
+      ↓
+model explicitly uses ordinary shell/tool path
+```
+
+No hidden auto-read or auto-execution channel is introduced.
 
 ### Must prove
 
-- activation is normalized-name idempotent;
-- repeated activation does not re-load or duplicate active state;
-- unknown names fail explicitly;
-- activation preserves cancellation;
-- store returns clones rather than shared mutable LoadedSkill state;
-- `load_skill` ToolResult is compact and contains no full body;
-- active Skill instructions can be converted into supplements for the next context preparation;
-- no SessionStore or Agent integration yet beyond ordinary tool semantics.
-
----
-
-## v0.4.6 — References + events + manual activation surface
-
-References remain ordinary file-tool reads; scripts remain ordinary shell/tool executions. Add metadata-only Skill lifecycle events and a shared explicit activation surface.
+- lifecycle events distinguish new vs reused activation;
+- events expose names/status/path metadata, not full body;
+- manual and model-driven activation converge on one ActiveSkillStore;
+- references are not implicitly loaded;
+- scripts are not implicitly executed;
+- cancellation/failure events preserve useful metadata without leaking instructions.
 
 ---
 
 ## v0.4.7 — Agent integration + examples + freeze
 
-Prove end-to-end progressive disclosure, update package/runtime version to `0.4.0`, finalize docs/examples, and freeze the branch.
+Prove the complete progressive-disclosure run lifecycle, clear active Skills between Agent runs, finalize package/runtime version `0.4.0`, update README/examples/docs, and freeze the branch.
 
 ---
 
@@ -327,12 +276,13 @@ Prove end-to-end progressive disclosure, update package/runtime version to `0.4.
 - [x] safe on-demand SkillLoader
 - [x] compact catalog renderer
 - [x] context supplement budget integration
-- [ ] run-scoped ActiveSkillStore
-- [ ] shared activation service
-- [ ] `load_skill` adapter
+- [x] run-scoped ActiveSkillStore
+- [x] shared activation service
+- [x] `load_skill` adapter
 - [ ] references remain ordinary file-tool reads
 - [ ] scripts remain ordinary tool executions
 - [ ] Skill lifecycle events
+- [ ] shared manual activation surface
 - [ ] deterministic end-to-end tests
 - [ ] educational examples
 - [ ] package/version/docs finalization
