@@ -3,23 +3,20 @@
 ## 1. Version identity
 
 - **Branch:** `v0.3`
-- **Base:** created from the latest `main` design state
-- **Theme:** context budget, context planning, tool-result reduction, and explicit compaction
+- **Theme:** context budget, causal context units, tool-result reduction, and explicit compaction
 - **Previous version:** `v0.2`
 - **Target package version:** `0.3.0`
 - **Status:** active implementation snapshot
 
-This branch is the canonical learning snapshot for the v0.3 mental model.
+This branch is the canonical learning snapshot for the v0.3 mental model:
 
-> **The durable conversation/session history is the source of truth. The model-visible context is a temporary, budgeted projection of that history.**
-
-The branch may contain design work before all v0.2 runtime code has been integrated. Do not misrepresent planned v0.3 mechanisms as implemented until the acceptance tests described below exist and pass.
+> **Durable session history is the source of truth. Model-visible context is a temporary, budgeted projection of that history.**
 
 ---
 
-## 2. Core difference from v0.2
+## 2. Architectural delta from v0.2
 
-v0.2 focuses on asynchronous execution mechanics:
+v0.2 focuses on asynchronous execution:
 
 ```text
 provider stream
@@ -31,10 +28,12 @@ tool scheduling
 ordered observations
 ```
 
-v0.3 introduces a different problem:
+v0.3 focuses on context preparation:
 
 ```text
 complete durable history
+          ↓
+     context units
           ↓
     ContextPlanner
           ↓
@@ -43,66 +42,33 @@ complete durable history
          LLM
 ```
 
-The architectural shift is:
-
-```text
-BEFORE
-runtime messages == model messages
-
-AFTER
-runtime history ───────────────► durable source of truth
-       │
-       └── ContextPlanner ─────► model-visible context
-```
-
----
-
-## 3. Primary mental model
-
-Three objects must remain distinct:
+The critical distinction is:
 
 ```text
 Runtime State
-────────────────────────────
-current run id
-turn number
-queues
-active cancellation
-active tools
-
+≠
 Durable Session History
-────────────────────────────
-append-only messages/events
-full tool results
-historical truth
-
-Model Context
-────────────────────────────
-selected recent messages
-summaries/checkpoints
-reduced large observations
-bounded token estimate
+≠
+Model-visible Context
 ```
 
-Compaction means reducing **model-visible context pressure**. It does **not** mean deleting historical truth.
+Compaction reduces model-context pressure. It must never silently destroy durable history.
 
 ---
 
-## 4. Main new subsystem
-
-v0.3 evolves the small v0.1 `ContextTransform` seam into an explicit context-planning subsystem.
-
-Target architecture:
+## 3. Target architecture
 
 ```text
 Agent history
+    │
+    ▼
+ContextUnitBuilder
     │
     ▼
 ContextPlanner
     │
     ├── TokenEstimator
     ├── ContextBudget
-    ├── ContextUnitBuilder
     ├── ToolResultReducer
     ├── SummaryStore
     └── CompactionPolicy
@@ -114,79 +80,25 @@ PreparedContext
 LLMProvider
 ```
 
-The Agent Loop should depend on the planner interface, not on individual compaction strategies.
+`AgentLoop` should eventually depend on the planner contract, not on individual compaction strategies.
 
 ---
 
-## 5. Target interfaces
+## 4. v0.3.1 — ContextBudget + ApproximateTokenEstimator ✅
 
-The exact syntax may evolve during implementation, but responsibilities should remain stable.
-
-```ts
-export interface TokenEstimator {
-  estimateText(text: string): number;
-  estimateSystem(text: string): number;
-  estimateMessage(message: AgentMessage): number;
-  estimateMessages(messages: readonly AgentMessage[]): number;
-}
-
-export interface ContextBudget {
-  contextWindow: number;
-  outputReserve: number;
-  safetyMargin: number;
-}
-
-export interface PreparedContext {
-  systemPrompt: string;
-  messages: AgentMessage[];
-  estimatedInputTokens: number;
-  compacted: boolean;
-  provenance: ContextProvenance;
-}
-
-export interface ContextPlanner {
-  prepare(input: {
-    systemPrompt: string;
-    history: readonly AgentMessage[];
-    budget: ContextBudget;
-    signal: AbortSignal;
-  }): Promise<PreparedContext>;
-}
-```
-
-The planner owns model-context construction. It does not own durable persistence.
-
----
-
-## 6. Context units and atomicity
-
-A context budget must not slice the history arbitrarily by message count.
-
-Important logical units include:
+Implemented:
 
 ```text
-UserMessage
+src/context/budget.ts
+src/context/errors.ts
+src/context/estimator.ts
+src/context/index.ts
 
-AssistantMessage without tool calls
-
-AssistantMessage with ToolCall[]
-        +
-corresponding ToolResultMessage[]
-
-Summary checkpoint
+tests/context-budget.test.ts
+tests/token-estimator.test.ts
 ```
 
-Invariant:
-
-> If an assistant tool call is visible to the model, its relevant tool result must not be silently removed from the same prepared context.
-
-This is why `TailContextTransform(maxMessages)` is useful only as an early teaching seam, not the final v0.3 policy.
-
----
-
-## 7. Budget model
-
-Effective input budget:
+Core model:
 
 ```text
 inputBudget
@@ -196,47 +108,195 @@ contextWindow
 - safetyMargin
 ```
 
-The planner should expose estimates for observability:
+Key properties:
 
-```text
-before estimate
-selected recent estimate
-summary estimate
-reduced-tool estimate
-final estimate
-```
-
-The first implementation uses a deterministic approximate estimator. Provider-specific exact tokenizers are not required for the reference mechanism.
-
-### v0.3.1 implemented
-
-The first code increment is now present:
-
-- [x] `ContextBudget`
-- [x] `ResolvedContextBudget`
-- [x] `resolveContextBudget()`
-- [x] `assertWithinContextBudget()`
-- [x] `ContextError`
-- [x] `InvalidContextBudgetError`
-- [x] `ContextBudgetExceededError`
-- [x] `TokenEstimator`
-- [x] `ApproximateTokenEstimator`
-- [x] `estimatePreparedInput()`
-- [x] public exports from `src/index.ts`
-- [x] budget unit tests
-- [x] estimator unit tests
-
-The estimator is intentionally approximate and deterministic. It exists to teach the budget lifecycle and keep tests provider/network independent.
+- budget components are validated;
+- reserves must leave a positive input budget;
+- overflow is explicit through `ContextBudgetExceededError`;
+- token estimation is deterministic and provider/network independent;
+- message framing and tool-call metadata contribute to the estimate;
+- `AgentLoop` remains unchanged at this stage.
 
 ---
 
-## 8. Large tool-result policy
+## 5. v0.3.2 — ContextUnitBuilder + ToolExchange atomicity ✅
 
-Large tool output is a first-class source of context pressure.
+Implemented:
 
-The durable session keeps the full result.
+```text
+src/context/units.ts
+tests/context-units.test.ts
+```
 
-The prepared context may replace a huge observation with an explicit reduction such as:
+Additional error:
+
+```text
+InvalidContextHistoryError
+```
+
+The runtime can now lift raw message history into causal units:
+
+```ts
+type ContextUnit =
+  | UserContextUnit
+  | AssistantContextUnit
+  | ToolExchangeContextUnit;
+```
+
+The most important new unit is:
+
+```text
+ToolExchangeContextUnit
+=
+AssistantMessage(toolCalls)
++
+matching ToolResultMessage[]
+```
+
+Example:
+
+```text
+Assistant
+  tool_call call_a: read(a.txt)
+  tool_call call_b: read(b.txt)
+
+ToolResult call_b
+ToolResult call_a
+
+        ↓
+
+one ToolExchangeContextUnit
+complete = true
+```
+
+Tool results may complete in an order different from the assistant's declared call order. The unit preserves the actual history order while matching by `toolCallId`.
+
+### Atomicity invariant
+
+> A later context policy must not retain an assistant tool call while silently dropping its corresponding observation merely because a raw-message cutoff crossed the exchange boundary.
+
+### Invalid history rules
+
+The builder rejects:
+
+- orphan `ToolResultMessage`;
+- a result referencing an unknown tool-call id inside an open exchange;
+- duplicate tool-call ids;
+- duplicate results for one tool-call id;
+- result `toolName` that disagrees with the declared call;
+- user/assistant messages inserted before an exchange is complete.
+
+### In-progress history rule
+
+A tool exchange is allowed to be incomplete only when it is the trailing unit of history:
+
+```text
+Assistant(call_a, call_b)
+ToolResult(call_a)
+<end of durable history>
+```
+
+It becomes:
+
+```text
+complete = false
+missingToolCallIds = ["call_b"]
+```
+
+This represents a recoverable/in-progress durable state, for example after interruption or crash recovery.
+
+Strict consumers may call:
+
+```ts
+buildContextUnits(history, {
+  allowIncompleteFinalToolExchange: false
+});
+```
+
+and reject such history explicitly.
+
+### Round-trip invariant
+
+For valid history:
+
+```text
+flattenContextUnits(buildContextUnits(history))
+==
+history
+```
+
+The builder reorganizes context semantics without mutating historical content.
+
+---
+
+## 6. Current public context primitives
+
+```ts
+ContextBudget
+ResolvedContextBudget
+resolveContextBudget()
+assertWithinContextBudget()
+
+ContextError
+InvalidContextBudgetError
+ContextBudgetExceededError
+InvalidContextHistoryError
+
+TokenEstimator
+ApproximateTokenEstimator
+estimatePreparedInput()
+
+ContextUnit
+UserContextUnit
+AssistantContextUnit
+ToolExchangeContextUnit
+buildContextUnits()
+flattenContextUnits()
+```
+
+The existing `src/core/context.ts` seam remains for compatibility until later AgentLoop integration.
+
+---
+
+## 7. Why context units come before the planner
+
+A naïve policy such as:
+
+```ts
+messages.slice(-20)
+```
+
+can produce invalid provider context:
+
+```text
+Assistant
+  call_a
+  call_b
+
+ToolResult call_a
+
+# ToolResult call_b was cut off
+```
+
+Therefore v0.3 first establishes causal units. Only then can a budget policy select or omit history safely.
+
+The planner should eventually operate on:
+
+```text
+ContextUnit[]
+```
+
+rather than independently discardable raw messages.
+
+---
+
+## 8. Large tool-result policy — next
+
+The next increment is `v0.3.3 — ToolResultReducer`.
+
+Large environment observations can dominate model context even when causal unit boundaries are correct.
+
+The durable session must retain the original result, while model-visible context may use an explicit reduced copy:
 
 ```text
 [tool result reduced for model context]
@@ -254,15 +314,25 @@ kept_tail_chars=8000
 ...
 ```
 
-The reduction marker must be explicit. Silent truncation is forbidden.
+Required invariant:
+
+```text
+durable ToolResultMessage
+      unchanged
+
+prepared/model copy
+      may be reduced explicitly
+```
+
+Silent truncation is forbidden.
 
 ---
 
-## 9. Summary as checkpoint
+## 9. Later summary model
 
-A summary should preserve operational state, not merely produce prose.
+Summaries remain future work in this branch.
 
-Recommended structure:
+A summary should act like a checkpoint with explicit identity and coverage:
 
 ```text
 Goal
@@ -274,64 +344,100 @@ Current state
 Open work
 ```
 
-A summary should have identity, coverage, token estimate and provenance so later compaction can reason about it explicitly.
-
----
-
-## 10. Progressive compaction
-
-Do not repeatedly summarize the entire history.
-
 Preferred progression:
 
 ```text
 messages 0..100 → S1
-
 S1 + messages 101..170 → S2
-
 S2 + messages 171..240 → S3
 ```
 
-This makes summaries act like checkpoints over an append-only log.
+Do not repeatedly summarize the entire history.
 
 ---
 
-## 11. Planned implementation stages
+## 10. Implementation stages
 
 ```text
 v0.3.1  ContextBudget + ApproximateTokenEstimator        ✅ implemented
-v0.3.2  ContextUnitBuilder + ToolExchange atomicity      ← next
-v0.3.3  ToolResultReducer
+v0.3.2  ContextUnitBuilder + ToolExchange atomicity      ✅ implemented
+v0.3.3  ToolResultReducer                                ← next
 v0.3.4  PreparedContext + KeepRecentPlanner
 v0.3.5  ContextSummary + SummaryStore
 v0.3.6  ProgressiveSummaryPolicy + ContextSummarizer
 v0.3.7  AgentLoop integration + events + examples
 ```
 
-Do not skip directly to summarization. The planner first needs stable units and deterministic accounting.
+The order is intentional:
+
+```text
+budget
+  ↓
+causal units
+  ↓
+large-output reduction
+  ↓
+selection planner
+  ↓
+summary checkpoints
+  ↓
+progressive compaction
+  ↓
+runtime integration
+```
 
 ---
 
-## 12. Important source files
-
-Current v0.3.1 additions:
+## 11. Important source files now
 
 ```text
 src/context/budget.ts
 src/context/errors.ts
 src/context/estimator.ts
+src/context/units.ts
 src/context/index.ts
+
 tests/context-budget.test.ts
 tests/token-estimator.test.ts
+tests/context-units.test.ts
 ```
 
-Existing seam retained for compatibility until later integration:
+Existing seam retained:
 
 ```text
 src/core/context.ts
 ```
 
-The next stage should add context-unit modeling without modifying AgentLoop.
+`AgentLoop` is intentionally not modified yet.
+
+---
+
+## 12. Verification status
+
+The v0.3.1 and v0.3.2 source subsets were checked with the repository's strict TypeScript rules:
+
+```text
+strict
+noUncheckedIndexedAccess
+exactOptionalPropertyTypes
+```
+
+Local smoke validation also verified:
+
+```text
+128000 - 12000 - 4000 = 112000
+
+trailing partial exchange
+→ complete=false
+→ missingToolCallIds is explicit
+
+partial exchange + later user message
+→ InvalidContextHistoryError
+```
+
+The `context-units` test source also passed TypeScript checking with a temporary Vitest type shim.
+
+The full repository Vitest suite is not claimed as run in this environment because package installation/network access was unavailable.
 
 ---
 
@@ -339,16 +445,16 @@ The next stage should add context-unit modeling without modifying AgentLoop.
 
 By the end of v0.3, a reader should be able to explain:
 
-1. why history and model context must diverge;
+1. why durable history and model context must diverge;
 2. why context is a budgeted resource;
-3. why token estimation is an interface rather than a provider detail;
-4. why tool-call/result groups must remain causally coherent;
-5. why large tool output needs explicit reduction;
-6. why summaries are checkpoints rather than replacement history;
-7. why progressive summarization is preferable to repeatedly summarizing the full log;
-8. why context planning belongs outside durable persistence;
-9. why the AgentLoop should only depend on a planner contract;
-10. how later Skills can participate in the same budget system.
+3. why token estimation is an interface;
+4. why tool-call/result groups are causal units;
+5. why an in-progress exchange differs from corrupt history;
+6. why large tool output needs explicit reduction;
+7. why summaries are checkpoints rather than replacement history;
+8. why progressive summarization is preferable to re-summarizing the full log;
+9. why context planning belongs outside persistence;
+10. why AgentLoop should depend on a planner contract rather than compaction policy details.
 
 ---
 
@@ -362,46 +468,28 @@ Not part of v0.3:
 - session DAG/branching
 - permissions/sandbox
 - RPC
-- vector database memory platform
-- semantic retrieval as a replacement for context lifecycle
+- vector-database memory platform
+- semantic retrieval as a substitute for correct context lifecycle
 - mandatory provider-specific tokenizers
 
 ---
 
-## 15. Current verification status
+## 15. Next increment
 
-For v0.3.1, the source subset was checked under the repository's strict TypeScript rules, including:
+`v0.3.3` introduces `ToolResultReducer`.
 
-```text
-strict
-noUncheckedIndexedAccess
-exactOptionalPropertyTypes
-```
-
-A local runtime smoke check also verified:
+The next question is no longer:
 
 ```text
-128000 - 12000 - 4000 = 112000 input budget
-budget overflow throws ContextBudgetExceededError
-system + message estimation is deterministic
+Which messages belong together?
 ```
 
-The full repository Vitest suite has not been claimed as run in this environment because package installation/network access was unavailable here.
+v0.3.2 now answers that.
 
----
-
-## 16. Next increment
-
-`v0.3.2` introduces `ContextUnitBuilder` and the first causal-atomicity model:
+The next question is:
 
 ```text
-AssistantMessage(toolCalls)
-          +
-matching ToolResultMessage(s)
-          ↓
-    ToolExchangeUnit
+What happens when one causally valid ToolResultMessage is itself far too large for the model budget?
 ```
 
-The next invariant to prove is:
-
-> Context selection must not leave a visible tool call without its corresponding observation merely because a raw message boundary crossed the budget cutoff.
+The answer must preserve the original durable observation while producing an explicit, deterministic, model-only reduced representation.
