@@ -34,15 +34,17 @@ PreparedContext
 LLMProvider
 
 v0.4 adds:
-Skill package roots
+Project Skill packages
    ↓
-SkillSource / discovery
+ProjectSkillSource
+   ↓
+SkillDescriptor[]
    ↓
 SkillRegistry
    ↓
-SkillLoader / activation
+future SkillLoader / activation
    ↓
-Context supplements
+future context supplements
    ↓
 existing ContextRuntime
 ```
@@ -89,7 +91,8 @@ A Skill can instruct the model to use ordinary tools, but no Skill discovery/loa
 
 ```text
 Level 0
-name + description
+SkillDescriptor
+name + description + package identity
 
         ↓ activate
 
@@ -107,7 +110,7 @@ Level 3
 scripts / assets / templates
 ```
 
-The default context must never inject every full Skill body.
+v0.4.2 completes Level 0. The default context still does not expose full Skill bodies.
 
 ---
 
@@ -140,67 +143,115 @@ interface ParsedSkillDocument {
 }
 ```
 
-Parser entry point:
+`parseSkillDocument()` parses an intentionally small deterministic frontmatter subset. It rejects duplicate keys, malformed lines, nested YAML, arrays/objects, block scalars, and empty required fields/body.
+
+---
+
+## 6. v0.4.2 — ProjectSkillSource + SkillRegistry ✅
+
+Implemented:
+
+```text
+src/skills/source.ts
+src/skills/project-source.ts
+src/skills/registry.ts
+src/skills/types.ts
+src/skills/errors.ts
+src/skills/index.ts
+
+tests/skill-discovery.test.ts
+tests/skill-registry.test.ts
+```
+
+### Discovery contracts
 
 ```ts
-parseSkillDocument(source: string): ParsedSkillDocument
+interface SkillDescriptor {
+  name: string;
+  description: string;
+  root: string;
+  manifestPath: string;
+  metadata?: Record<string, string>;
+}
+
+interface SkillDiscoveryContext {
+  cwd: string;
+  signal: AbortSignal;
+}
+
+interface SkillSource {
+  discover(context: SkillDiscoveryContext): Promise<SkillDescriptor[]>;
+}
 ```
 
-The v0.4.1 frontmatter subset is intentionally narrow and deterministic:
+Reference source:
 
-```text
----
-name: code-review
-description: Review changes for bugs and regressions.
-owner: platform
----
-# Code Review
-...
+```ts
+class ProjectSkillSource implements SkillSource
 ```
 
-Supported:
-
-- required opening/closing `---` delimiters;
-- non-empty `name` and `description`;
-- non-empty Markdown instructions body;
-- additional scalar metadata;
-- single/double-quoted scalar values;
-- BOM and CRLF/CR normalization;
-- blank/comment lines inside frontmatter.
-
-Explicitly rejected:
-
-- duplicate keys;
-- nested/indented mappings;
-- arrays and objects;
-- YAML block scalars;
-- malformed `key: value` lines;
-- missing required fields/body.
-
-Errors use:
+Reference root:
 
 ```text
-SkillError
-└── InvalidSkillManifestError
+<cwd>/.mini-pi/skills/*/SKILL.md
 ```
 
-with line provenance where available.
+Discovery semantics:
 
-### v0.4.1 invariant
+- only one package-directory level is scanned;
+- only real directories are considered packages;
+- packages without `SKILL.md` are ignored;
+- non-file/symlink `SKILL.md` entries are ignored by the reference source;
+- nested `references/scripts/assets` are not traversed;
+- missing project Skill root returns `[]`;
+- invalid top-level `SKILL.md` propagates `InvalidSkillManifestError`;
+- cancellation is checked before, during, and after discovery;
+- returned values are descriptors only and do not contain `instructions`.
+
+### Registry model
+
+```ts
+class SkillRegistry {
+  list(): readonly SkillDescriptor[];
+  get(name: string): SkillDescriptor | undefined;
+}
+```
+
+Name identity is normalized using:
 
 ```text
-string SKILL.md
+trim + lowercase
+```
+
+Therefore:
+
+```text
+Code-Review
+code-review
+ CODE-REVIEW 
+```
+
+are the same registry identity. Duplicate normalized names fail with `DuplicateSkillError` including both manifest paths.
+
+Registry ordering is deterministic by normalized Skill name. Construction, `list()`, and `get()` clone descriptors/metadata so callers cannot mutate internal catalog state through shared references.
+
+### v0.4.2 invariant
+
+```text
+project filesystem
       ↓
-pure parser
+ProjectSkillSource
       ↓
-manifest + instructions
+SkillDescriptor[]
+      ↓
+SkillRegistry
 ```
 
-No filesystem scan, registry mutation, Skill activation, context injection, or script execution occurs in this stage.
+No selected Skill body is loaded into active model context in this stage.
 
 ### Verification
 
-The source subset passed strict TypeScript checking with:
+The source subset passed TypeScript checking with:
 
 ```text
 strict
@@ -208,25 +259,25 @@ noUncheckedIndexedAccess
 exactOptionalPropertyTypes
 ```
 
-Runtime smoke verified quoted metadata, BOM/CRLF normalization, duplicate-key rejection, and rejection of unsupported list metadata.
+Runtime smoke verified two discovered packages, descriptor-only output, deterministic registry ordering, case-insensitive lookup, duplicate rejection, and cancellation propagation.
 
 The full repository Vitest suite is not claimed as run in the current execution environment.
 
 ---
 
-## 6. Planned increments
+## 7. Implementation stages
 
 ```text
 v0.4.1  Skill manifest parser + core types                   ✅ implemented
-v0.4.2  ProjectSkillSource + SkillRegistry                  ← next
-v0.4.3  SkillLoader + path/root validation
+v0.4.2  ProjectSkillSource + SkillRegistry                  ✅ implemented
+v0.4.3  SkillLoader + path/root validation                  ← next
 v0.4.4  compact catalog + context supplement seam
 v0.4.5  run-scoped activation + load_skill adapter
 v0.4.6  references + events + manual activation surface
 v0.4.7  Agent integration + examples + 0.4.0 freeze
 ```
 
-The order is intentional:
+The order remains intentional:
 
 ```text
 document format
@@ -246,40 +297,40 @@ end-to-end runtime integration
 
 ---
 
-## 7. Next increment — v0.4.2
+## 8. Next increment — v0.4.3
 
-The next problem is no longer “what is a valid Skill document?” v0.4.1 now answers that.
-
-The next problem is:
+The next problem is now:
 
 ```text
-Given a project workspace,
-which Skills exist,
-and how do we expose a deterministic cheap catalog
-without loading every Skill body into model context?
+The registry knows a Skill exists.
+How do we safely load exactly that Skill's full SKILL.md instructions
+without allowing package-root escape or identity drift?
 ```
 
-v0.4.2 introduces:
+v0.4.3 introduces:
 
 ```text
-SkillDiscoveryContext
-SkillDescriptor
-SkillSource
-ProjectSkillSource
-SkillRegistry
+LoadedSkill
+SkillLoader
+FilesystemSkillLoader
+Skill path/root validation
+SkillPathError
+SkillIdentityMismatchError
 ```
 
-Reference root:
+Required invariants:
 
-```text
-<cwd>/.mini-pi/skills/*/SKILL.md
-```
-
-Discovery may read enough of `SKILL.md` to obtain manifest metadata, but it must return descriptors only and must never execute scripts/references.
+- descriptor root and manifest path are validated;
+- manifest path must remain under Skill root;
+- parsed manifest name must match descriptor normalized identity;
+- full instructions are loaded only for the requested descriptor;
+- references/scripts/assets remain unloaded;
+- source descriptor objects remain unchanged;
+- cancellation propagates.
 
 ---
 
-## 8. Explicit non-goals
+## 9. Explicit non-goals
 
 Keep out of v0.4:
 
@@ -299,7 +350,7 @@ Keep out of v0.4:
 
 ---
 
-## 9. Branch rule
+## 10. Branch rule
 
 `v0.4` is the canonical branch for the Skills mental model.
 
