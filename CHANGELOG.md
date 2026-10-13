@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.3.4
+
+- Added `ContextPlanner`, `ContextPlannerInput`, `PreparedContext`, and structured `ContextProvenance`.
+- Added `KeepRecentContextPlanner` as the first budgeted model-context construction policy.
+- Composed context units, tool-result reduction, token estimation, and resolved budgets into one deterministic pipeline.
+- Selected a chronological contiguous suffix of the newest complete context units; the planner never skips a middle unit merely to pack more history.
+- Rejected incomplete trailing tool exchanges before provider-context preparation.
+- Failed explicitly when the system prompt or newest atomic unit cannot fit the resolved input budget.
+- Added reduction provenance for model-visible ToolResult projections while preserving durable history unchanged.
+- Added cancellation checks around context preparation.
+- Added tests for full-fit history, suffix selection, tool-exchange atomicity, reducer integration, overflow, incomplete exchange, and cancellation.
+- Kept AgentLoop unchanged; planner integration remains for v0.3.7.
+
 ## v0.3.3
 
 - Added `ToolResultReducer` and deterministic `HeadTailToolResultReducer`.
