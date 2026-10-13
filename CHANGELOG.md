@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.4.1
+
+- Added the first Skills data contracts: `SkillManifest` and `ParsedSkillDocument`.
+- Added pure, dependency-free `parseSkillDocument()` for the educational `SKILL.md` frontmatter subset.
+- Required opening/closing frontmatter delimiters, non-empty `name`, non-empty `description`, and a non-empty Markdown instructions body.
+- Preserved unknown top-level scalar frontmatter as `manifest.metadata`.
+- Added support for UTF-8 BOM, CRLF/CR normalization, comments, blank lines, and single/double-quoted scalar values.
+- Rejected duplicate keys, malformed entries, nested/indented YAML, arrays/objects, and block scalars rather than silently approximating full YAML semantics.
+- Added `SkillError` and `InvalidSkillManifestError`, including line provenance when available.
+- Exported the Skills manifest API through `src/skills/index.ts` and the package root.
+- Added deterministic parser tests covering valid manifests, metadata, quoting, malformed documents, duplicates, unsupported YAML shapes, and side-effect-free repeatability.
+- Strict TypeScript source-subset checking and parser runtime smoke passed; the full repository Vitest suite is not claimed as run in the current execution environment.
+
 ## v0.3.7
 
 - Added `ContextRuntime` as the summary-aware orchestration layer between context mechanisms and `AgentLoop`.
