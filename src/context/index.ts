@@ -8,7 +8,8 @@ export {
   ContextBudgetExceededError,
   ContextError,
   InvalidContextBudgetError,
-  InvalidContextHistoryError
+  InvalidContextHistoryError,
+  InvalidToolResultReductionOptionsError
 } from "./errors.js";
 export {
   ApproximateTokenEstimator,
@@ -16,6 +17,14 @@ export {
   type ApproximateTokenEstimatorOptions,
   type TokenEstimator
 } from "./estimator.js";
+export {
+  HeadTailToolResultReducer,
+  resolveToolResultReductionOptions,
+  type ResolvedToolResultReductionOptions,
+  type ToolResultReducer,
+  type ToolResultReduction,
+  type ToolResultReductionOptions
+} from "./tool-result-reducer.js";
 export {
   buildContextUnits,
   flattenContextUnits,
