@@ -34,7 +34,9 @@ export class LoadSkillTool implements Tool {
       throw new InvalidSkillActivationError("load_skill requires a non-empty string 'name'");
     }
 
-    const result = await this.activationService.activate(rawName, context.signal);
+    const result = await this.activationService.activate(rawName, context.signal, {
+      origin: "tool"
+    });
     const name = result.skill.descriptor.name;
 
     return {
