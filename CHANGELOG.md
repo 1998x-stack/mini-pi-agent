@@ -1,18 +1,30 @@
 # Changelog
 
+## v0.5.3
+
+- Added setup-scoped `ExtensionAPI.registerTool(tool)` over the ordinary runtime `Tool` contract.
+- Added an internal owned Tool registration adapter so Tool registrations join the same Extension registration set as hooks.
+- Updated `ExtensionHost` to accept an optional shared `ToolRegistry`; hook-only callers remain compatible through a private default registry.
+- Changed `ToolRegistry.register()` to return an idempotent `ToolRegistration` handle while remaining compatible with callers that ignore the return value.
+- Made Tool registration disposal identity-safe: an old handle only removes the exact Tool instance it registered and cannot delete a later `replace()` value.
+- Added typed core `ToolAlreadyRegisteredError` for duplicate Tool names.
+- Preserved atomic Extension setup across mixed hook/tool registrations: Tool collisions or later setup failures roll back everything created by that setup.
+- Preserved built-in and other Extension Tools during target Extension unload.
+- Added `tests/extension-tools.test.ts` covering ordinary ToolRegistry validation/execution, built-in collisions, mixed rollback, exact unload cleanup, late setup failure, setup-scoped registration, and replacement safety.
+- Strict TypeScript source-subset checking passed under `strict`, `noUncheckedIndexedAccess`, and `exactOptionalPropertyTypes`.
+- Runtime smoke verified ordinary Tool execution, typed collision provenance, owned unload cleanup, and identity-safe removable registration behavior.
+- Full repository Vitest is not claimed as run in the current execution environment.
+
 ## v0.5.2
 
 - Added `ExtensionDefinition`, `LoadedExtension`, normalized extension identity, and clone-safe host descriptors.
-- Added setup-scoped `ExtensionAPI` with `on(hook, handler)` only; the capability closes immediately after setup resolves or rejects.
+- Added setup-scoped `ExtensionAPI` with `on(hook, handler)`; the capability closes immediately after setup resolves or rejects.
 - Added `ExtensionHost` with serialized `load()` / `unload()` operations so async setup completion timing cannot reorder Extensions or hooks.
 - Added per-Extension owned registration tracking with reverse-order disposal for setup rollback and unload.
 - Added atomic setup semantics: any setup failure removes all registrations created by that setup and does not commit a loaded Extension record.
 - Added typed `DuplicateExtensionError`, `UnknownExtensionError`, `InvalidExtensionDefinitionError`, `ExtensionApiClosedError`, and `ExtensionSetupError` with original cause provenance.
-- Kept Host implementation details (`ScopedExtensionAPI` and the registration set) out of the package public API.
-- Added `tests/extension-host.test.ts` covering deterministic setup order, concurrent load serialization, normalized duplicate rejection, atomic rollback, exact unload cleanup, setup API closure, clone semantics, invalid definitions, and unknown unload.
-- Strict TypeScript source-subset checking passed under `strict`, `noUncheckedIndexedAccess`, and `exactOptionalPropertyTypes`.
-- Runtime Host smoke verified failed-setup rollback, closed retained setup API, and exact owned-hook cleanup after unload.
-- Full repository Vitest is not claimed as run in the current execution environment.
+- Kept Host implementation details out of the package public API.
+- Added focused ExtensionHost tests plus strict TypeScript checking and runtime Host smoke.
 
 ## v0.5.1
 
@@ -33,10 +45,8 @@
 - Integrated project Skill discovery at `Agent.create()` and automatic registration of the ordinary `load_skill` Tool.
 - Added strict run-scoped activation lifecycle: `ActiveSkillStore` clears before and after every `Agent.prompt()` run.
 - Bridged metadata-only Skill lifecycle events into the normal Agent event stream with `runId` and `turn` while keeping `core/events.ts` independent from Skills implementation types.
-- Added `tests/agent-skills-integration.test.ts` proving catalog-only first turn, selected Skill activation, next-turn active body visibility, unrelated Skill body non-exposure, compact durable ToolResult, metadata-only events, and cross-prompt active-state clearing.
-- Added `examples/09-progressive-skills.ts` and `npm run demo:skills`.
+- Added `tests/agent-skills-integration.test.ts` and `examples/09-progressive-skills.ts`.
 - Finalized `package.json` and `MINI_PI_VERSION` as `0.4.0`.
-- Rewrote README and v0.4 architecture/version/implementation docs to describe the implemented frozen snapshot rather than target design.
 
 ## v0.4.6
 
