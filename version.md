@@ -32,39 +32,43 @@ scoped ExtensionAPI during setup only
       └── registerTool(tool)
               ↓
           ToolRegistry
+              ↓
+        executeToolCall()
+              ↓
+       before_tool pipeline
+              ↓
+     validate / execute / block
 ```
 
-The Host now guarantees:
+The Host guarantees normalized unique identity, deterministic serialized setup, atomic mixed hook/tool rollback, and exact owned-registration cleanup.
+
+## Tool execution invariant
+
+Every Tool category uses the same ordinary execution path:
 
 ```text
-normalized unique Extension identity
-deterministic serialized setup order
-setup-scoped registration capability
-atomic rollback across mixed hook/tool registrations
-exact owned-registration cleanup on unload
+built-in Tool
+Skill Tool such as load_skill
+Extension-owned Tool
+        │
+        ▼
+ToolRegistry.get()
+        ↓
+before_tool HookPipeline
+        ├── continue
+        ├── replace arguments only
+        └── block
+        ↓
+ToolRegistry.validate(final args)
+        ↓
+Tool.execute(final args)
 ```
 
-`Agent` and `AgentLoop` are not integrated with Extension hooks yet.
+There is no Extension-specific Tool executor.
 
-## Tool registration invariant
+A block becomes an explicit durable error `ToolResultMessage`; the blocked Tool implementation is never executed and the following model turn can observe the denial.
 
-Extension Tools are ordinary Tools:
-
-```text
-ExtensionAPI.registerTool(tool)
-      ↓
-ToolRegistry.register(tool)
-      ↓
-ToolRegistry.get / validate
-      ↓
-Tool.execute
-```
-
-There is no separate Extension Tool executor.
-
-`ToolRegistry.register()` returns an identity-safe removable handle. Disposing an old registration cannot remove a later replacement under the same name.
-
-Duplicate Tool names fail explicitly through `ToolAlreadyRegisteredError`; Extension setup preserves that typed error as `ExtensionSetupError.cause` and rolls back earlier registrations from the same setup.
+`ExtensionHookError` and run cancellation remain run-level failures rather than being downgraded to ToolResults.
 
 ## Hook surface
 
@@ -78,27 +82,15 @@ after_turn
 after_run
 ```
 
-`before_tool` is the strongest initial gate/transform seam:
-
-```text
-ToolCall
-  ↓
-continue / replace arguments / block
-```
-
-Only explicit handler return values have runtime meaning. Handler mutation of cloned event input does not.
+Only explicit Hook return values have runtime meaning. Handler mutation of cloned input does not.
 
 ## Ordering
-
-Reference v0.5 order remains intentionally simple:
 
 ```text
 Extension load invocation order
 then
 handler registration order within each setup
 ```
-
-Host operations are serialized so async setup completion timing cannot change registration ordering.
 
 No numeric hook priorities exist in v0.5.
 
@@ -108,15 +100,16 @@ No numeric hook priorities exist in v0.5.
 v0.5.1  hook contracts + deterministic HookPipeline          ✅
 v0.5.2  ExtensionDefinition + ExtensionHost + ownership      ✅
 v0.5.3  Extension-owned Tool registration + unload cleanup   ✅
+v0.5.4  before_tool Runtime integration                       ✅
 ```
 
 ## Next increment
 
 ```text
-v0.5.4  before_tool gate/replace Runtime integration          ← next
+v0.5.5  model/run hooks + budgeted context contributions      ← next
 ```
 
-The next step inserts the already-defined HookPipeline into the ordinary ToolCall → ToolRegistry.validate → Tool.execute path, preserving ToolCall id/name and turning blocks into explicit error ToolResults.
+The next step integrates `before_run`, `before_model`, `after_model`, `after_tool`, `after_turn`, and `after_run`. Any Extension-added model-visible material must enter as `ContextSupplement[]` before ContextRuntime/ContextPlanner budgeting.
 
 ## Explicit non-goals
 
