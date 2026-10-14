@@ -14,6 +14,7 @@ Secondary invariant:
 v0.5.1  hook contracts + deterministic HookPipeline          ✅
 v0.5.2  ExtensionDefinition + ExtensionHost + ownership      ✅
 v0.5.3  Extension-owned Tool registration + unload cleanup   ✅
+v0.5.4  before_tool gate/replace Runtime integration         ✅
 ```
 
 ## v0.5.1 — Hook contracts + deterministic HookPipeline ✅
@@ -30,131 +31,114 @@ Implemented normalized Extension identity, setup-scoped capability access, seria
 
 ## v0.5.3 — Extension-owned Tool registration + unload cleanup ✅
 
+Implemented setup-scoped `registerTool()`, generic identity-safe removable Tool registrations, typed Tool collisions, mixed hook/tool setup rollback, and exact owned Tool cleanup on unload. Extension Tools use the ordinary `ToolRegistry` and `Tool.execute()` path.
+
+---
+
+## v0.5.4 — `before_tool` gate/replace Runtime integration ✅
+
 ### Implemented
 
 ```text
-src/core/errors.ts
-src/core/tool-registry.ts
-src/extensions/api.ts
-src/extensions/host.ts
-src/extensions/tool-registrations.ts
+src/core/tool-execution.ts
+src/core/agent-loop.ts
 src/index.ts
 
-tests/extension-tools.test.ts
+tests/before-tool-integration.test.ts
 ```
 
-### Public setup capability
+### Generic tool-execution seam
 
-`ExtensionAPI` now exposes:
+`AgentLoop` no longer contains the concrete resolve/validate/execute error wrapper inline. It delegates one ToolCall to:
 
 ```ts
-interface ExtensionAPI {
-  readonly extensionName: string;
-
-  on<K extends HookName>(
-    hook: K,
-    handler: HookHandler<K>
-  ): Disposable;
-
-  registerTool(tool: Tool): Disposable;
-}
+executeToolCall({
+  call,
+  tools,
+  hooks?,
+  cwd,
+  runId,
+  turn,
+  signal
+})
 ```
 
-`registerTool()` is setup-scoped exactly like `on()`. Retaining the API and trying to register a Tool after setup closes fails through `ExtensionApiClosedError`.
+The helper is generic runtime infrastructure. It knows `HookPipeline`, but never any concrete Extension name or policy.
 
-### Ordinary Tool path
-
-Extension Tools use the existing runtime Tool contract and registry:
+### Execution order
 
 ```text
-Extension.setup(api)
+Assistant ToolCall
       ↓
-api.registerTool(tool)
+AbortSignal check
       ↓
-ToolRegistry.register(tool)
+ToolRegistry.get(original name)
       ↓
-ToolRegistry.get / validate
+before_tool HookPipeline
+      ├── continue
+      ├── replace arguments only
+      └── block with extension provenance
       ↓
-Tool.execute
+continue path:
+ToolRegistry.validate(final arguments)
+      ↓
+Tool.execute(final arguments)
+      ↓
+ToolResultMessage
 ```
 
-There is no `ExtensionToolExecutor` and no second execution protocol.
+A `replace` preserves ToolCall `id` and `name`; only `arguments` change. The transformed arguments are what schema validation and `Tool.execute()` receive.
 
-### Generic removable Tool registration
+### Block semantics
 
-`ToolRegistry.register()` now returns an idempotent `ToolRegistration` handle while remaining source-compatible with callers that ignore the return value.
-
-```ts
-interface ToolRegistration {
-  dispose(): void;
-}
-```
-
-Disposal is identity-safe:
+A block is not a hook failure and does not disappear silently.
 
 ```text
-register Tool A under name X
+before_tool → block
       ↓
-replace X with Tool B
+actual Tool.execute() is skipped
       ↓
-dispose old registration A
+ToolResultMessage
+  role = tool
+  isError = true
+  toolCallId = original call id
+  toolName = original call name
+  content includes blocking extension + reason
       ↓
-Tool B remains
+normal durable AgentMessage history
+      ↓
+next model turn can observe denial
 ```
 
-This prevents an old Extension registration handle from deleting a later replacement that it does not own.
+`ToolExecutionOutcome` also exposes `blockedByExtension` for callers that need structured provenance without parsing ToolResult content.
 
-Duplicate names now fail through the core typed `ToolAlreadyRegisteredError` rather than a generic Error.
+### Failure boundary
 
-### Ownership / rollback / unload
-
-Tool registrations enter the same `ExtensionRegistrationSet` as hook registrations.
-
-Therefore setup remains atomic across mixed registrations:
+Three failure classes remain intentionally distinct:
 
 ```text
-register hook A
-register tool B
-register hook C
-setup throws
-      ↓
-dispose C
-remove B
-.dispose A
-      ↓
-no loaded Extension record
+Extension returns block
+→ explicit error ToolResult
+→ run continues
+
+ordinary Tool resolve / validate / execute failure
+→ explicit error ToolResult
+→ run continues
+
+Extension hook throws ExtensionHookError
+→ propagated as run-level failure
+
+AbortSignal cancellation
+→ original abort reason propagated
 ```
 
-Likewise:
+Hook failures/cancellation are therefore not silently downgraded into ordinary Tool observations.
 
-```text
-Extension Alpha → alpha_tool + Alpha hooks
-Extension Beta  → beta_tool  + Beta hooks
-built-in Tool   → builtin
+### One path for every Tool
 
-unload(Alpha)
-→ alpha_tool removed
-→ Alpha hooks removed
-→ beta_tool remains
-→ Beta hooks remain
-→ builtin remains
-```
+Built-in Tools, Skill-provided `load_skill`, and Extension-owned Tools all pass through the same `executeToolCall()` seam once a HookPipeline is supplied.
 
-Host accepts an optional shared `ToolRegistry`. If omitted it creates a private registry so existing hook-only v0.5.2 callers remain valid. Agent integration will later pass the Agent's ordinary ToolRegistry explicitly.
-
-### Collision semantics
-
-If an Extension tries to register a Tool name already owned by a built-in or another Extension:
-
-```text
-ToolRegistry.register()
-→ ToolAlreadyRegisteredError
-→ Extension setup fails
-→ previous registrations from that setup roll back
-→ ExtensionSetupError.cause preserves ToolAlreadyRegisteredError
-```
-
-No replacement shortcut is introduced for Extensions.
+No `ExtensionToolExecutor` exists.
 
 ### Verification performed
 
@@ -169,63 +153,72 @@ exactOptionalPropertyTypes
 Runtime smoke verified:
 
 ```text
-Extension Tool executes through ordinary ToolRegistry
-built-in collision preserves ToolAlreadyRegisteredError cause
-failed setup leaves built-in Tool untouched
-unload removes owned Extension Tool
-identity-safe old registration does not delete later replacement
+invalid original args
+→ before_tool replaces args
+→ final args pass validation
+→ Tool executes with replacement
+
+before_tool blocks Tool
+→ Tool execute counter unchanged
+→ explicit error ToolResult contains blocker + reason
 ```
 
-Focused tests additionally cover ordinary validation/execution, mixed hook+Tool rollback, exact unload cleanup, late setup failure, setup-scoped `registerTool()`, and replacement safety.
+Focused integration tests additionally prove:
+
+- ToolCall id/name remain unchanged;
+- replacement arguments reach validation and execution;
+- built-in and Extension-owned Tools traverse the same hook path;
+- `ExtensionHookError` propagates instead of becoming a ToolResult;
+- cancellation preserves the original abort reason;
+- blocked ToolResults are appended to durable history;
+- the following provider request sees the blocked ToolResult;
+- the blocked Tool implementation is never executed.
 
 The full repository Vitest suite is not claimed as run in the current execution environment.
 
 ---
 
-## v0.5.4 — `before_tool` gate/replace Runtime integration ← next
+## v0.5.5 — Model/run hooks + budgeted context contributions ← next
 
 ### Goal
 
-Integrate the already-implemented HookPipeline into the ordinary Agent tool execution path without teaching AgentLoop any concrete Extension policy.
+Integrate the remaining stable lifecycle seams while preserving v0.3/v0.4 context-budget and durable-history invariants.
 
-### Required flow
+### Integrate
 
 ```text
-Assistant ToolCall
-      ↓
-ToolRegistry.get(original name)
-      ↓
-before_tool HookPipeline
-      ├── continue
-      ├── replace arguments only
-      └── block with extension provenance
-      ↓
-if continue:
-ToolRegistry.validate(final args)
-      ↓
-Tool.execute(final args)
-
-if blocked:
-explicit ToolResultMessage
-isError = true
-actual Tool.execute() is never called
+before_run
+before_model
+after_model
+after_tool
+after_turn
+after_run
 ```
 
-### Must prove
+### Context rule
 
-- ToolCall `id` and `name` remain unchanged;
-- replacement arguments are what validation and execution receive;
-- block short-circuits execution;
-- blocked calls become durable explicit observations rather than disappearing;
-- built-in and Extension Tools pass through the same hook path;
-- hook failure/cancellation semantics remain those defined in v0.5.1;
-- AgentLoop knows only generic HookPipeline semantics, never Extension names.
+Extension model-visible material from `before_run` / `before_model` must enter as `ContextSupplement[]` before `ContextRuntime` / `ContextPlanner` budgeting.
 
----
+Forbidden:
 
-## v0.5.5 — Model/run hooks + budgeted context contributions
+```text
+PreparedContext
+      ↓
+append Extension prompt text afterwards   ❌
+```
 
-Integrate `before_run`, `before_model`, `after_model`, `after_tool`, `after_turn`, and `after_run`. Extension model context must enter as `ContextSupplement[]` before ContextRuntime budgeting.
+### Hook power
+
+```text
+before_run    → context contribution only
+before_model  → context contribution only
+after_model   → observe only
+after_tool    → constrained current ToolResult transform
+after_turn    → observe only
+after_run     → observe / cleanup-oriented
+```
+
+Must define precisely whether an `after_tool` transformed result is the durable/model-visible result and retain clear provenance.
 
 ---
 
@@ -255,7 +248,9 @@ Expose `AgentOptions.extensions`, prove the complete lifecycle end to end, add a
 - [x] Tool unload cleanup
 - [x] typed Tool collision semantics
 - [x] identity-safe removable Tool registration
-- [ ] before_tool Agent/runtime integration
+- [x] before_tool Agent/runtime integration
+- [x] blocked ToolCall becomes durable explicit observation
+- [x] built-in / Skill / Extension Tools share one hook-aware Tool path
 - [ ] budgeted before_model contributions
 - [ ] remaining run/model/tool hooks
 - [ ] failure/cancellation cleanup semantics
