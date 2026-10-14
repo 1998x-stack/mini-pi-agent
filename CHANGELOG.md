@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.5.4
+
+- Added generic `executeToolCall()` core seam for one ToolCall through optional Extension `before_tool` hooks.
+- Updated `AgentLoop` to delegate ordinary Tool execution through the shared helper while remaining Extension-name agnostic.
+- Integrated `before_tool` before schema validation so argument replacements are the values that `ToolRegistry.validate()` and `Tool.execute()` receive.
+- Preserved ToolCall `id` and `name`; Extensions may replace arguments only.
+- Added explicit block semantics: blocked calls skip the actual Tool and become durable `ToolResultMessage { isError: true }` observations containing blocking Extension provenance and reason.
+- Kept ordinary Tool resolve/validate/execute failures as ToolResult observations while preserving `ExtensionHookError` and AbortSignal cancellation as run-level failures.
+- Ensured built-in Tools, Skill Tools such as `load_skill`, and Extension-owned Tools share the same hook-aware ordinary Tool path.
+- Added `tests/before-tool-integration.test.ts` covering argument replacement before validation, block short-circuiting, shared built-in/Extension Tool path, hook error/cancellation propagation, and durable blocked-result visibility on the next model turn.
+- Strict TypeScript source-subset checking passed under `strict`, `noUncheckedIndexedAccess`, and `exactOptionalPropertyTypes`.
+- Runtime smoke verified replacement-before-validation and explicit block behavior with no Tool execution.
+- Full repository Vitest is not claimed as run in the current execution environment.
+
 ## v0.5.3
 
 - Added setup-scoped `ExtensionAPI.registerTool(tool)` over the ordinary runtime `Tool` contract.
